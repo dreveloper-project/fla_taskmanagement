@@ -1,0 +1,1689 @@
+PSEUDOCODE FITUR SISTEM PT Flores Lautan Abadi
+Berdasarkan implementasi proyek pada 10 Oktober 2026.
+Termasuk Surat Laut / Pas Besar / Pas Kecil, Task Monitoring, Reports,
+pengarsipan layanan/dokumen, serta sistem dua level pengguna Admin dan Staff.
+Mencakup sinkronisasi PIC layanan/task otomatis, halaman tambah/edit Vessel,
+validasi file frontend, popup notifikasi animasi, ekspor XLSX, dan tombol password.
+
+NOTASI DAN CAKUPAN
+Role pengguna: admin dan staff; status akun: active dan inactive.
+Admin dan Staff memakai workflow bisnis yang sama; Admin tidak bypass readiness.
+Staff hanya boleh mengerjakan layanan dengan assigned_staff_id/PIC dirinya.
+Staff hanya boleh mengerjakan task dengan assigned_to dirinya.
+Reassignment mencabut izin petugas lama, termasuk pada form yang sudah terbuka.
+INPUT: masukan pengguna. OUTPUT: hasil operasi.
+JIKA/SELAIN ITU: percabangan. UNTUK: perulangan.
+VALIDASI/PASTIKAN: hentikan aksi dengan pesan jika syarat gagal.
+TRANSAKSI: perubahan database dilakukan bersama; gagal berarti rollback.
+Nilai status menggunakan nama yang disimpan di database.
+Waktu layanan mengikuti konfigurasi Asia/Makassar dan datetime disimpan UTC.
+Status kedaluwarsa master dokumen menggunakan timezone aplikasi (saat ini UTC).
+Pengajuan dan hasil instansi dicatat manual; tidak ada API otoritas.
+Task Monitoring berbasis database dan terhubung ke kelima workflow layanan.
+Status/progress Task terpisah dari status Service dan tidak mengubah status layanan.
+Penggantian PIC task otomatis aktif oleh Admin juga memperbarui PIC layanan terkait.
+Penugasan task manual tetap terpisah dari PIC layanan.
+Reports membaca data operasional; tidak membuat tabel salinan laporan.
+Ekspor laporan memakai file XLSX; seluruh hasil filter disertakan tanpa batas paginator.
+Input file diperiksa di frontend sebelum upload; validasi backend tetap wajib.
+Pesan error tetap berada di atas form dan dilengkapi popup notifikasi bersama.
+Setiap field password memiliki tombol tampilkan/sembunyikan dengan state terpisah.
+Arsip layanan bersifat logis melalui archived_at; berkas tetap di storage privat.
+
+DAFTAR ISI
+01. Akses dan autentikasi
+02. Pengaturan akun
+03. Client
+04. Vessel dan dokumen
+05. Status dokumen, versi, dan Create Service
+06. Pola bersama layanan
+07. SPB
+08. Sertifikat Keselamatan Kapal Penumpang
+09. Izin Bunker
+10. Sijil Awak Kapal
+11. Surat Laut / Pas Besar / Pas Kecil
+12. Pencarian dan monitoring layanan
+13. Dashboard Overview
+14. Unduhan
+15. Task Monitoring, otomatisasi, history, dan lampiran
+16. Operations Reports, filter, agregasi, XLSX, dan cetak
+17. Pengarsipan layanan dan dokumen
+18. Staff Management, otorisasi, dan assignment
+19. Error form, validasi file frontend, dan popup notifikasi
+20. Peta sumber implementasi
+
+======================================================================
+01. AKSES DAN AUTENTIKASI
+======================================================================
+PROSEDUR AKSES_OPERASIONAL(pengguna)
+    JIKA belum login: arahkan ke login
+    Middleware web memastikan akun yang login masih active
+    JIKA inactive: logout; invalidasi session; regenerasi token CSRF
+        Arahkan ke login dengan pesan "Akun tidak aktif. Hubungi Admin."
+    Gate access-system mengizinkan hanya active admin atau active staff
+    Gate access-admin mengizinkan hanya active admin
+    Route operasional memakai auth dan access-system
+    Route Staff Management juga memakai access-admin; Staff ditolak 403
+    Pemeriksaan berlaku pada request HTTP dan pembaruan Livewire
+    Tampilkan halaman jika seluruh pemeriksaan sesuai
+SELESAI
+
+PROSEDUR HALAMAN_REGISTRASI_PERTAMA
+    GET /register hanya tersedia untuk guest saat users masih kosong
+    Jika sudah ada satu pengguna, termasuk inactive: arahkan ke login
+    Form tidak menyediakan pilihan role/status
+    Halaman login menampilkan tautan Buat Admin pertama hanya jika users kosong
+        Selain itu tampilkan arahan menghubungi Admin untuk akun Staff
+SELESAI
+
+PROSEDUR REGISTRASI(input, foto_opsional)
+    Batasi registrasi 5 permintaan per menit per IP
+    FormRequest menolak POST dengan 403 jika users sudah berisi
+    Trim dan ubah username/email menjadi huruf kecil
+    Validasi nama, username unik, email unik, password dan konfirmasi
+    Telepon dan foto opsional; username 3-50 karakter, huruf kecil/angka/titik/garis bawah
+    Foto: JPG/JPEG/PNG/WebP, maksimum 2 MB, dimensi maksimum 4096 x 4096
+    Password mengikuti kebijakan aplikasi; produksi minimum 12 karakter,
+        huruf besar/kecil, angka, simbol, dan pemeriksaan kebocoran
+    Simpan foto ke storage privat bila ada
+    Gunakan cache store database yang mendukung atomic lock
+    Ambil lock initial-admin-registration: masa lock 120 detik; tunggu maksimum 5 detik
+        MULAI TRANSAKSI
+            Cek kembali User.exists() di dalam lock
+            Jika sudah ada pengguna: tolak 403 tanpa membuat akun kedua
+            Buat pengguna dari identitas tervalidasi; password di-hash oleh model
+            Backend menetapkan role = admin dan status = active
+            Abaikan role/status serta atribut istimewa dari request
+            Simpan pengguna; commit
+        Lepaskan lock otomatis setelah callback berakhir
+    Jika gagal: rollback bila perlu; hapus foto baru
+        Jika lock timeout: tampilkan pesan registrasi awal sedang diproses
+        Selain itu: teruskan kesalahan
+    Kirim event Registered; login otomatis; regenerasi session; arahkan ke Overview
+    Flash auth_status <- "Akun berhasil dibuat. Selamat datang."
+    Tampilkan popup sukses pada halaman tujuan
+    Semua akun Staff berikutnya dibuat melalui Admin, tanpa registrasi publik
+SELESAI
+
+PROSEDUR LOGIN(username, password, remember, IP)
+    Normalisasi username; validasi input
+    kunci_limit <- hash(username + IP)
+    JIKA sudah 5 kegagalan dan limit masih aktif: tampilkan waktu tunggu
+    Coba autentikasi username/password dengan role admin atau staff
+    Setelah kredensial benar, callback attemptWhen memeriksa status active
+        Inactive tidak menghasilkan login berhasil atau session login baru
+    JIKA gagal: tambah hit limit selama 60 detik
+        Kredensial benar tetapi inactive -> pesan akun tidak aktif
+        Selain itu -> pesan username atau password salah
+    JIKA berhasil: terapkan remember; bersihkan limit; regenerasi session
+        Arahkan ke tujuan sebelumnya atau Overview
+        Flash auth_status <- "Login berhasil. Selamat datang kembali."
+        Tampilkan popup sukses pada halaman tujuan
+SELESAI
+
+PROSEDUR LOGOUT
+    Logout; invalidasi session; regenerasi token CSRF; arahkan ke login
+    Flash auth_status <- "Anda berhasil logout."; tampilkan popup sukses
+SELESAI
+
+PROSEDUR TAMPILKAN_FIELD_PASSWORD(field)
+    Berlaku pada login, registrasi, ubah password, dan tambah Staff
+        Termasuk password saat ini, password baru, dan konfirmasi password
+    Gunakan komponen password-field; nilai awal passwordVisible <- false
+    Render input dengan type password dan ruang untuk tombol ikon mata di kanan
+    Tombol bertipe button agar klik tidak mengirim form
+    Saat tombol diklik: passwordVisible <- NOT passwordVisible
+        Jika true: type input <- text; ikon mata dicoret; label Sembunyikan password
+        Jika false: type input <- password; ikon mata; label Tampilkan password
+    Perbarui title, aria-label, aria-pressed, dan aria-controls untuk field terkait
+    State setiap field terpisah; perubahan hanya memengaruhi tampilan input
+    Pertahankan autocomplete, required, validasi, serta binding Livewire yang ada
+    Input password tidak diisi ulang dari old input setelah validasi gagal
+SELESAI
+
+======================================================================
+02. PENGATURAN AKUN
+======================================================================
+PROSEDUR UBAH_AKUN(input)
+    Pastikan Admin/Staff aktif; validasi identitas seperti registrasi
+    Role/status tidak dapat diubah melalui Account Settings
+    Telepon tetap wajib pada validasi Account Settings existing
+    Keunikan username/email mengecualikan akun sendiri
+    Tolak upload foto baru sekaligus pilihan hapus foto
+    Simpan foto baru bila ada
+    COBA perbarui nama, username, email dan telepon
+        Jika email berubah: kosongkan email_verified_at
+        Jika ada foto baru: gunakan foto baru
+        Jika hanya hapus foto dipilih: kosongkan path foto
+        Simpan pengguna
+    JIKA gagal: hapus foto baru; teruskan kesalahan
+    JIKA berhasil dan foto berubah: hapus file foto lama
+    Tampilkan pesan berhasil
+SELESAI
+
+PROSEDUR UBAH_PASSWORD(lama, baru, konfirmasi)
+    Pastikan Admin/Staff aktif; endpoint dibatasi 6 permintaan per menit
+    Validasi password lama benar, password baru sesuai kebijakan,
+        berbeda dari password lama, dan konfirmasi cocok
+    Simpan password melalui cast hash; ganti remember token
+    Regenerasi session; tampilkan pesan berhasil
+SELESAI
+
+======================================================================
+03. CLIENT
+======================================================================
+PROSEDUR SIMPAN_CLIENT(id_opsional, nama, identitas)
+    Pastikan Admin/Staff aktif; trim input
+    Nama wajib, maksimal 255 karakter; identitas opsional maksimal 255
+    Identitas kosong menjadi NULL
+    Jika id tersedia: perbarui Client; selain itu: buat Client
+    Reset form/validasi; tampilkan pesan berhasil
+    Tampilkan daftar berdasarkan id terbaru, 10 baris per halaman
+SELESAI
+CATATAN: Halaman existing tidak menyediakan hapus Client.
+
+======================================================================
+04. VESSEL DAN DOKUMEN
+======================================================================
+PROSEDUR BUKA_HALAMAN_TAMBAH_VESSEL
+    Pastikan Admin/Staff aktif
+    Tombol Tambah Vessel menuju route vessels.create: /dashboard/vessel/create
+    Tandai registrationPage sebagai state yang dikunci dari perubahan client
+    Reset form dan validasi; isi bendera Indonesia dan status berthed sebagai default
+    Siapkan input setiap jenis dokumen; tampilkan form pada halaman tersendiri
+    Daftar kapal, detail, dan dialog keberangkatan tidak ditampilkan pada halaman ini
+SELESAI
+
+PROSEDUR BUKA_HALAMAN_EDIT_VESSEL(vessel)
+    Pastikan Admin/Staff aktif
+    Tombol Edit menuju route vessels.edit: /dashboard/vessel/{vessel}/edit
+    Parameter vessel wajib numerik; route model binding menolak Vessel tidak ada
+    Tandai editingPage sebagai state yang dikunci dari perubahan client
+    Muat data Vessel serta dokumen dan tanggal saat ini
+    Tampilkan judul Edit Vessel dan form pada halaman tersendiri
+    Kelola Dokumen dari daftar tetap memakai dialog khusus mode dokumen saja
+SELESAI
+
+PROSEDUR SIMPAN_VESSEL(id_opsional, data, dokumen, mode_dokumen_saja)
+    Pastikan Admin/Staff aktif dan form terbuka; normalisasi string/tanggal kosong
+    Jika bukan mode dokumen saja:
+        Validasi nama, jenis, status operasional, bendera, Client bila dipilih
+        Validasi data registrasi, tahun pembuatan, tonase dan dimensi
+        Angka tonase/dimensi tidak negatif, maksimum 2 desimal
+        Jika Client dipilih: kosongkan owner manual
+    Untuk setiap jenis dokumen yang diizinkan:
+        File PDF/JPG/JPEG/PNG maksimum 2048 KB
+        Tanggal opsional; kedaluwarsa tidak sebelum terbit
+        Dokumen baru dengan tanggal terisi wajib menyertakan file
+    MULAI TRANSAKSI
+        Jika existing: kunci Vessel
+        Jika layanan keselamatan aktif: larang perubahan jenis kapal
+        Jika SPB aktif: larang perubahan jenis/status operasional manual
+        Simpan atribut Vessel
+        Untuk tiap dokumen:
+            Jika tidak ada dokumen lama DAN tidak ada file baru: lewati
+            Jika file/tanggal dokumen berversi berubah: arsipkan versi lama
+            Jika file baru: simpan privat di vessels/{id}; ganti path/nama asli
+            Untuk dokumen berversi dengan file baru: kosongkan nomor/sumber
+            Untuk jenis lain: tandai file lama untuk dihapus sesudah commit
+            Simpan tanggal dan dokumen aktif
+    Jika gagal: rollback; hapus file baru; tampilkan kesalahan
+    Jika berhasil: commit; hapus file lama yang tidak diarsipkan
+    Flash pesan berhasil sesuai tambah/edit/dokumen
+    Pada halaman tambah/edit: kembali ke dashboard.vessel melalui navigasi Livewire
+        Tampilkan popup sukses pada halaman tujuan
+    Pada mode dialog: reset form dan perbarui daftar/ringkasan
+SELESAI
+
+PROSEDUR BATAL_FORM_VESSEL
+    Pada halaman tambah/edit: kembali ke dashboard.vessel
+    Pada dialog dokumen: tutup form; reset state form, dokumen, dan validasi
+SELESAI
+Jenis berversi: safety_certificate, surat_laut, pas_besar, pas_kecil.
+
+PROSEDUR TAMPILKAN_VESSEL
+    Ambil Vessel, Client dan dokumen; urutkan id terbaru; 9 kapal per halaman
+    Hitung total, berthed, sailing, maintenance
+    Nama pemilik <- nama Client ATAU owner manual ATAU Belum diisi
+    Detail memuat dokumen/versi, riwayat layanan, dan penempatan kru
+SELESAI
+
+======================================================================
+05. STATUS DOKUMEN, VERSI, DAN CREATE SERVICE
+======================================================================
+FUNGSI STATUS_DOKUMEN(expired_date)
+    Jika NULL: unknown
+    hari_ini <- tanggal pada timezone aplikasi
+    Jika expired_date < hari_ini: expired
+    Jika expired_date <= hari_ini + warning_days: expiring_soon
+    Selain itu: valid
+SELESAI
+Konfigurasi warning_days saat ini 30 hari, termasuk batas hari ke-30.
+
+FUNGSI KONDISI_DOKUMEN_KAPAL(dokumen)
+    Jika kosong: No document uploaded
+    Hitung tiap status; prioritaskan ringkasan expired dan expiring_soon
+    Jika keduanya tidak ada tetapi unknown ada: masa berlaku belum diketahui
+    Selain itu: All Documents Valid
+SELESAI
+
+PROSEDUR ARSIPKAN_VERSI(dokumen, petugas)
+    Salin nomor, path, nama file, tanggal dan sumber layanan
+        ke VesselDocumentVersion
+    Simpan status=superseded, archived_at dan archived_by
+    Pertahankan file lama agar tetap dapat diunduh
+SELESAI
+
+FUNGSI LINK_CREATE_SERVICE(dokumen)
+    Hanya lanjut jika expired/expiring_soon dan jenis mempunyai mapping
+    safety_certificate -> safety-certificates.create, hanya kapal passenger
+    surat_laut/pas_besar/pas_kecil -> ship-nationality.create
+    sijil_awak_kapal -> sijil.create
+    Sertakan vessel_id, client_id, document_type, document_id, service_type
+    Untuk keselamatan/kebangsaan: request_type=renewal, previous_document_id
+    Jika route belum tersedia: tidak ada link
+SELESAI
+
+======================================================================
+06. POLA BERSAMA LAYANAN
+======================================================================
+PROSEDUR MUTASI_LAYANAN(layanan, aksi)
+    Pastikan Admin/Staff aktif
+    Untuk layanan existing, periksa ServicePolicy.work dengan PIC terbaru:
+        Admin aktif diizinkan; Staff aktif hanya jika assigned_staff_id = dirinya
+        Staff lain dan layanan tanpa PIC ditolak 403
+    Untuk simpan draft kelima layanan, terapkan SIAPKAN_PIC_LAYANAN (bagian 18)
+        sebelum validasi dan ulangi setelah layanan dikunci dalam transaksi
+    MULAI TRANSAKSI
+        Kunci Vessel lalu layanan dengan lockForUpdate
+        Ulangi otorisasi ServicePolicy.work pada layanan yang telah dikunci
+        Baca status terbaru; tolak aksi yang tidak diizinkan
+        Jalankan aksi, simpan perubahan dan status history
+        Setelah aksi valid selesai, sinkronkan task berdasarkan status akhir
+            melalui SINKRONKAN_TASK_LAYANAN dalam transaksi yang sama
+        Jika sinkronisasi gagal: rollback perubahan layanan dan task
+    Jika gagal: rollback; hapus file baru; laporkan kegagalan pembersihan
+    Jika berhasil: commit; kembalikan data terbaru
+SELESAI
+
+FUNGSI NOMOR_LAYANAN(prefix, id)
+    Saat insert gunakan prefix + ULID sementara
+    Setelah mendapatkan id: prefix + tahun lokal + id minimal 4 digit
+    Prefix: SPB, SKK, BKR, SJL, SN
+SELESAI
+
+PROSEDUR UPLOAD_LAYANAN(files, jenis_diizinkan, jenis_wajib)
+    Tolak key jenis dokumen yang tidak diizinkan untuk aksi
+    Validasi kewajiban, MIME, ekstensi PDF/JPG/JPEG/PNG dan maksimum 2048 KB
+    Simpan file privat dengan nama hasil storage
+    Tambah baris jenis, path, nama asli aman, pengunggah dan waktu
+    Upload ulang menambah baris; versi terkini adalah id terbesar per jenis
+    Pertahankan lampiran layanan sebelumnya
+SELESAI
+
+PROSEDUR CATAT_HISTORY(asal, tujuan, event, petugas, catatan, metadata)
+    Simpan from_status, to_status, event, changed_by, notes, metadata dan waktu
+    Detail menampilkan timeline dari id terbaru
+SELESAI
+
+FUNGSI CEK_DOKUMEN_VESSEL(vessel, requirements)
+    Untuk tiap requirement, cari salah satu jenis alternatif:
+        Jika file tidak di storage: File missing
+        Jika must_be_valid dan status expired/unknown: belum lengkap
+        Selain itu: lengkap; hentikan pencarian alternatif
+        Jika tidak ditemukan: Missing
+    Kembalikan hasil dan flag required
+    Hanya requirement wajib yang menghalangi readiness
+SELESAI
+
+======================================================================
+07. SPB / SURAT PERSETUJUAN BERLAYAR
+======================================================================
+PROSEDUR DRAFT_SPB
+    Validasi Vessel, PIC staff, prioritas, total kru, pelabuhan, tujuan,
+        estimasi keberangkatan dan selesai kegiatan pelabuhan
+    Selesai kegiatan tidak boleh sesudah estimasi keberangkatan
+    Client mengikuti Vessel; jika Vessel tanpa Client, input Client wajib
+    Kapal passenger wajib total_passengers; selain itu kosong menjadi 0
+    carrying_cargo wajib deskripsi; tanpa muatan kosongkan rincian muatan
+    Existing hanya draft/revision_required; Vessel tidak dapat diganti
+    Simpan nomor SPB, lampiran, history; kosongkan revision_ready_at
+SELESAI
+
+FUNGSI READINESS_SPB
+    Wajib spb_request_letter, master_sailing_declaration, crew_list,
+        warta_kapal, payment_proof, pnbp_proof
+    Jika passenger ATAU total_passengers > 0: wajib passenger_manifest
+    Jika carrying_cargo: wajib cargo_manifest dan deskripsi
+    Jika port_cargo_activity_applicable: wajib rkbm dan pbm
+    Semua file wajib harus tersedia di storage
+    Dokumen Vessel wajib: Surat Ukur; Surat Laut/Pas Besar/Pas Kecil;
+        Safety Certificate; Safe Manning; Classification Certificate
+    tanggal_acuan <- maksimum(hari ini WITA, estimasi berangkat WITA)
+    Dokumen harus berlaku sampai tanggal_acuan
+    Keselamatan, Safe Manning dan Classification wajib expired_date
+    Kembalikan complete dan daftar kekurangan
+SELESAI
+
+PROSEDUR SIAPKAN_SPB
+    Izinkan draft/revision_required; readiness harus lengkap
+    draft -> ready_to_apply
+    revision_required -> isi revision_ready_at, status tetap revisi
+    Catat history
+SELESAI
+
+PROSEDUR AJUKAN_SPB(tanggal, referensi)
+    Izinkan ready_to_apply/revision_required
+    Revisi wajib revision_ready_at; periksa ulang readiness
+    Tanggal bukan masa depan dan tidak sebelum pengajuan sebelumnya
+    Salin referensi dokumen Vessel; simpan submitted_at atau resubmitted_at
+    status <- applied; kosongkan revision_ready_at; catat history
+SELESAI
+
+PROSEDUR HASIL_SPB(hasil)
+    Pastikan status applied
+    revision_required: wajib catatan/item revisi; lampiran opsional
+        status <- revision_required; kosongkan revision_ready_at
+    rejected: wajib alasan; lampiran opsional; status rejected dan arsip logical
+    approved: wajib nomor, tanggal terbit, file issued_spb
+        Terbit tidak sebelum pengajuan terakhir atau di masa depan
+        Tolak jika kapal punya SPB lain ready_to_sail/sailing
+        status <- ready_to_sail; kapal belum otomatis berlayar
+    Catat history
+SELESAI
+
+PROSEDUR KONFIRMASI_BERANGKAT_DARI_VESSEL(spb, waktu)
+    SPB harus milik Vessel yang dipilih, ready_to_sail, belum dikonfirmasi
+    Kapal harus berthed; file issued_spb harus tersedia
+    Waktu tidak sebelum SPB terbit dan tidak di masa depan
+    Vessel <- sailing; isi sailed_at dan petugas
+    SPB <- sailing; isi actual_departure_at dan petugas; catat history
+SELESAI
+
+PROSEDUR HASIL_PELAYARAN(hasil, alasan)
+    Izinkan ready_to_sail/sailing
+    success: keberangkatan wajib sudah dikonfirmasi; status <- completed
+    failed: alasan wajib; status <- failed_to_sail; lampiran opsional
+        Jika kapal sudah berangkat: kembalikan Vessel ke berthed
+    Isi completed_at, archived_at, petugas; catat history
+SELESAI
+
+======================================================================
+08. SERTIFIKAT KESELAMATAN KAPAL PENUMPANG
+======================================================================
+PROSEDUR DRAFT_KESELAMATAN
+    Validasi Vessel passenger, request new_issue/renewal, prioritas, PIC staff
+    Target/catatan opsional; nomor SKK; simpan lampiran dan history
+    Existing hanya draft/revision_required; Vessel tetap
+    Request Type tetap sesudah pengajuan
+    Tangkap snapshot sertifikat lama dan salinan file bila tersedia
+SELESAI
+
+FUNGSI READINESS_KESELAMATAN
+    Kapal passenger; request valid
+    Wajib Surat Ukur, Surat Laut/Pas Besar/Pas Kecil, General Arrangement
+    Wajib application_letter dan technical_attachment
+    Renewal wajib file sertifikat lama dari referensi atau master Vessel
+    Persyaratan lainnya mengikuti config; kembalikan complete dan missing
+SELESAI
+
+PROSEDUR ALUR_KESELAMATAN
+    draft + readiness lengkap -> ready_to_apply
+    ready_to_apply/revision_required + readiness lengkap -> under_review
+        Validasi kronologi pengajuan; snapshot dokumen; catat referensi/instansi
+    under_review/waiting_for_issuance dapat tetap under_review,
+        revision_required (catatan wajib), atau rejected (alasan dan arsip)
+    inspection_required -> jalankan penjadwalan inspeksi
+    approved -> jalankan penerbitan sertifikat
+SELESAI
+
+PROSEDUR INSPEKSI
+    Penjadwalan diizinkan pada under_review/inspection_scheduled
+    Jadwal/lokasi wajib; jadwal tidak sebelum pengajuan terakhir
+    Simpan pemeriksa/catatan; reset hasil; status <- inspection_scheduled
+    Untuk mencatat hasil: status harus inspection_scheduled
+    Waktu hasil tidak sebelum jadwal atau di masa depan
+    Revisi wajib temuan/catatan; ditolak wajib alasan; laporan opsional
+    Catat inspection_completed, kemudian:
+        passed -> waiting_for_issuance
+        awaiting_decision -> under_review
+        revision_required -> revision_required
+        rejected -> rejected dan arsip logical
+SELESAI
+
+PROSEDUR TERBITKAN_SERTIFIKAT
+    Izinkan under_review/waiting_for_issuance
+    Nomor, tanggal terbit, file resmi wajib
+    Expired Date wajib sesuai config dan harus sesudah tanggal terbit
+    Tanggal terbit tidak sebelum pengajuan terakhir atau di masa depan
+    Tolak jika path sertifikat master berbeda dari snapshot awal
+    Simpan file layanan; arsipkan versi master lama bila ada
+    Salin hasil ke VesselDocument safety_certificate; simpan sumber layanan
+    Catat certificate_issued kemudian ready_for_handover dalam satu transaksi
+SELESAI
+
+PROSEDUR HANDOVER_KESELAMATAN
+    Status ready_for_handover; penerima/waktu wajib; jabatan/bukti opsional
+    File resmi/master harus tersedia dan master masih bersumber dari layanan
+    Waktu tidak sebelum terbit atau di masa depan
+    Simpan serah terima/petugas; isi completed_at dan archived_at
+    status <- completed; catat history
+SELESAI
+
+======================================================================
+09. IZIN BUNKER
+======================================================================
+PROSEDUR DRAFT_BUNKER
+    Validasi Vessel, prioritas, PIC opsional, jenis bahan bakar, catatan
+    Supplier/lokasi/jadwal/quantity/unit boleh belum lengkap pada draft
+    Quantity yang diisi harus positif; unit other memerlukan nama satuan
+    Client mengikuti Vessel; PIC mengikuti aturan SIAPKAN_PIC_LAYANAN di bagian 18
+    Existing hanya draft/revision_required; Vessel tetap
+    Simpan nomor BKR, lampiran dan history
+SELESAI
+
+FUNGSI READINESS_BUNKER
+    Wajib Vessel, supplier, lokasi, jadwal, bahan bakar, quantity dan unit
+    Validasi quantity positif, unit dan nama satuan lain
+    Wajib file application_letter dan bunker_request
+    Cek dokumen Vessel sesuai config (default semuanya opsional)
+    Kembalikan complete dan missing requirements
+SELESAI
+
+PROSEDUR ALUR_BUNKER
+    draft + readiness -> ready_to_apply
+    ready_to_apply/revision_required + readiness -> under_review
+        Validasi tanggal, snapshot dokumen, catat referensi/instansi
+    under_review + revisi -> revision_required, catatan wajib
+    under_review + ditolak -> rejected, alasan wajib, arsip logical
+    under_review + disetujui -> approved, tanggal dan file approval wajib
+        Approval tidak sebelum pengajuan terakhir atau di masa depan
+    approved/bunker_scheduled + jadwal lengkap -> bunker_scheduled
+        Supplier/lokasi/quantity/unit wajib; file approval harus tersedia
+        Jadwal tidak sebelum approval; perubahan jadwal dicatat
+    bunker_scheduled + realisasi lengkap:
+        Wajib waktu, quantity/unit aktual; quantity positif
+        Waktu tidak sebelum approval atau di masa depan; file approval tersedia
+        Bukti kegiatan/pembayaran opsional
+        Catat bunker_completed lalu completed; isi completed_at/archived_at
+    Pembatalan sebelum kegiatan selesai: alasan wajib -> cancelled dan arsip
+SELESAI
+
+======================================================================
+10. SIJIL AWAK KAPAL
+======================================================================
+PROSEDUR DRAFT_SIJIL
+    Validasi Vessel, process_type, prioritas; PIC/target/catatan opsional
+    Client mengikuti Vessel; PIC mengikuti aturan SIAPKAN_PIC_LAYANAN di bagian 18
+    Maksimal 100 baris kru; lampiran harus terkait indeks baris yang tersedia
+    Existing hanya draft/revision_required; Vessel tetap
+    Process Type tetap setelah pengajuan
+    Identitas/action baris existing tidak dapat diganti langsung:
+        hapus baris lalu pilih kembali jika ingin mengganti
+    Rekam id penempatan dan expected_revision saat kru aktif dipilih
+    Simpan nama, rank, nomor buku pelaut, nomor kompetensi pada baris layanan
+    Nomor buku pelaut menjadi huruf besar; baris dihapus diberi removed_at
+    Simpan nomor SJL, lampiran, history; master kru belum berubah
+SELESAI
+
+FUNGSI READINESS_SIJIL
+    Minimal satu kru; process_type harus valid
+    sign_on hanya aksi sign_on; sign_off hanya aksi sign_off
+    crew_change memerlukan sign_on dan sign_off
+    registration_update mengizinkan sign_on/update
+    Untuk setiap kru:
+        Nama/rank wajib; aksi sesuai proses; cegah kru dan nomor buku duplikat
+        sign_on: kru tidak boleh aktif pada Vessel manapun
+        sign_off/update: kru harus aktif pada Vessel layanan
+        Id penempatan/revision harus sama dengan snapshot pilihan
+        Utamakan dokumen baris layanan, lalu dokumen master kru; file harus ada
+    sign_on/update wajib seafarer_book, competency_certificate, pkl
+    sign_off wajib seafarer_book
+    Wajib application_letter dan crew_list; cek Vessel sesuai config
+    Kembalikan complete, missing, dan hasil pemeriksaan per kru
+SELESAI
+
+PROSEDUR ALUR_SIJIL
+    draft + readiness -> ready_to_apply
+    ready_to_apply/revision_required + readiness -> under_review
+        Validasi kronologi; salin referensi dokumen kru/Vessel; catat history
+    under_review + revisi -> revision_required; catatan wajib
+    under_review + ditolak -> rejected; alasan wajib dan arsip
+    under_review + approved -> ready_to_update_crew
+        Tanggal hasil wajib, tidak sebelum pengajuan terakhir atau masa depan
+        File official_result wajib sesuai config (default true)
+SELESAI
+
+PROSEDUR TERAPKAN_KRU(tanggal_efektif)
+    Status harus ready_to_update_crew; file resmi harus tersedia sesuai config
+    Kunci master kru berdasarkan id; periksa ulang readiness
+    Tanggal efektif tidak di masa depan/sebelum perubahan penempatan terakhir
+    Untuk tiap baris, simpan before_snapshot:
+        sign_on: buat/perbarui master; buat penempatan aktif revision=1
+        sign_off: kosongkan active_crew_id; catat tanggal/layanan sign_off
+        update: perbarui identitas master dan penempatan
+        Untuk penempatan existing: tambah revision; isi last_changed_at
+        Simpan after_snapshot; kaitkan dokumen baris dengan master kru
+    Isi effective_at, completed_by, completed_at, archived_at
+    status <- completed; catat history
+    Jika satu baris gagal: rollback seluruh perubahan
+SELESAI
+Pembatalan sijil aktif memerlukan alasan dan menghasilkan cancelled.
+
+======================================================================
+11. SURAT LAUT / PAS BESAR / PAS KECIL
+======================================================================
+PROSEDUR DRAFT_KEBANGSAAN
+    Validasi Vessel, document_type, request_type, prioritas
+    document_type: surat_laut, pas_besar, pas_kecil
+    request_type: new_issue, renewal; PIC staff/target/catatan opsional
+    Client mengikuti Vessel; abaikan status/client_id palsu dari input
+    Existing hanya draft/revision_required; Vessel dan Document Type tetap
+    Request Type tetap setelah pengajuan
+    Simpan nomor SN; tangkap snapshot dokumen lama dan salinan bila tersedia
+    Renewal tanpa dokumen lama tetap boleh disimpan sebagai draft
+    Simpan lampiran dan history
+SELESAI
+
+FUNGSI READINESS_KEBANGSAAN
+    Validasi jenis dokumen dan request
+    Jika eligibility mengatur allowed_vessel_types: periksa kecocokan
+        Default tidak membatasi jenis kapal/GT
+    Cek dokumen Vessel sesuai config (default Surat Ukur wajib)
+    Bukti pendaftaran/kepemilikan wajib melalui salah satu:
+        Dokumen Vessel dari config (default grosse_akta)
+        Lampiran layanan ownership_evidence
+    Renewal wajib file dokumen lama yang tersedia:
+        Jika tidak: tambahkan "Dokumen lama belum tersedia."
+    Wajib dokumen layanan dari config (default application_letter)
+    Kembalikan complete dan missing requirements
+SELESAI
+
+PROSEDUR AJUKAN_KEBANGSAAN
+    draft + readiness lengkap -> ready_to_apply
+    ready_to_apply/revision_required boleh diajukan setelah readiness ulang
+    Tanggal tidak di masa depan/sebelum pengajuan terakhir
+    Simpan submitted_at atau resubmitted_at, referensi, instansi dan catatan
+    Snapshot dokumen Vessel tersedia; status <- under_review; catat history
+SELESAI
+
+PROSEDUR REVIEW_KEBANGSAAN(hasil)
+    Status harus under_review
+    revision_required: catatan wajib; lampiran opsional
+    rejected: alasan wajib; lampiran opsional; terminal dan arsip logical
+    document_issued: jalankan penerbitan dokumen
+SELESAI
+
+PROSEDUR TERBITKAN_DOKUMEN_KEBANGSAAN(nomor, terbit, expired, file, instansi)
+    Pastikan Admin/Staff aktif dan status under_review
+    Nomor, tanggal terbit dan file issued_document wajib
+    Expired Date boleh NULL; jika diisi harus sesudah tanggal terbit
+    Tanggal terbit tidak sebelum pengajuan terakhir atau di masa depan
+    DALAM TRANSAKSI, kunci Vessel dan layanan:
+        Ambil VesselDocument dengan jenis sama dengan document_type layanan
+        Bandingkan id, path, nomor dan tanggal dengan snapshot awal
+        Jika berubah: tolak agar hasil layanan lain tidak tertimpa
+        Simpan file resmi pada dokumen layanan
+        Jika master lama ada: arsipkan ke VesselDocumentVersion
+        Buat/perbarui master jenis yang sama; salin file ke storage Vessel
+        Simpan nomor pada certificate_number, tanggal, path,
+            source_ship_nationality_service_id
+        Simpan issued_document_number dan issued_document_id pada layanan
+        Catat document_issued lalu ready_for_handover dalam transaksi sama
+    Monitoring kedaluwarsa kini membaca master terbaru
+    Jika gagal: rollback master/versi/history dan bersihkan file baru
+SELESAI
+
+PROSEDUR HANDOVER_KEBANGSAAN
+    Status harus ready_for_handover
+    Nama penerima/waktu wajib; jabatan, bukti, catatan opsional
+    File layanan dan master aktif harus tersedia
+    Master masih harus bersumber dari layanan ini
+    Waktu tidak sebelum terbit atau di masa depan
+    Simpan penerima, waktu, petugas, bukti; completed_at dan archived_at
+    status <- completed; history ditambah; file/versi tetap tersedia
+SELESAI
+
+PROSEDUR BATALKAN_KEBANGSAAN(alasan)
+    Izinkan draft/ready_to_apply/under_review/revision_required
+    Alasan wajib; status <- cancelled; isi archived_at; catat history
+    Layanan yang sudah terbit tidak dibatalkan melalui aksi ini
+    Jangan hapus layanan, file atau history
+SELESAI
+
+======================================================================
+12. PENCARIAN DAN MONITORING LAYANAN
+======================================================================
+PROSEDUR DAFTAR_LAYANAN(modul, filter)
+    Muat layanan dengan Vessel, Client, PIC dan relasi tampilan
+    Trim pencarian maksimal 255 karakter; gunakan LIKE terparameterisasi
+    Cari nomor layanan, nama Vessel, nama Client; tambahan:
+        SPB: tujuan; keselamatan: nomor sertifikat
+        bunker: supplier/lokasi/jenis bahan bakar; sijil: nama kru
+        kebangsaan: nomor dokumen terbit
+    Terapkan filter status, Vessel dan prioritas yang valid
+    SPB juga mendukung jenis kapal/pending
+    Keselamatan mendukung request_type, expiry sertifikat, attention
+    Bunker/sijil mendukung active/attention
+    Kebangsaan mendukung document_type, request_type, active/attention
+    Tanggal valid diubah menjadi awal/akhir hari lokal lalu UTC:
+        SPB: estimated_departure_at; bunker: scheduled_at
+        sijil: submitted_at; keselamatan/kebangsaan: created_at
+    Urutkan id terbaru; 10 baris per halaman
+    Filter berubah -> reset pagination
+    Summary menghitung semua status modul, bukan hanya hasil pencarian
+SELESAI
+
+PROSEDUR DETAIL_LAYANAN
+    Tampilkan informasi, Vessel/Client, dokumen, hasil, serah terima dan history
+    Tampilkan missing requirements pada tahap persiapan/revisi
+    Tampilkan aksi sesuai status; backend tetap memvalidasi setiap aksi
+    Berhasil -> reset form/upload, muat ulang data, tampilkan pesan
+    Gagal -> tampilkan kesalahan dan jangan klaim berhasil
+SELESAI
+
+======================================================================
+13. DASHBOARD OVERVIEW
+======================================================================
+FUNGSI NEED_ATTENTION
+    SPB: revision_required
+    Keselamatan: aktif DAN (revisi ATAU inspeksi lewat ATAU due_at lewat
+        ATAU sertifikat keselamatan kapal expired)
+    Bunker: revisi/ditolak ATAU aktif dengan jadwal bunker lewat
+    Sijil: aktif DAN (revisi ATAU due_at lewat ATAU readiness tidak lengkap)
+    Kebangsaan: aktif DAN (revisi ATAU due_at lewat
+        ATAU dokumen kapal dengan jenis sama expired)
+    Task: status pending/in_progress/in_review DAN due_at < sekarang
+        Admin menghitung semua Task; Staff menghitung assigned_to dirinya sendiri
+SELESAI
+
+PROSEDUR HITUNG_OVERVIEW
+    Pastikan access-system; ringkasan layanan/Vessel tetap operasional global
+    Active Services <- jumlah ACTIVE pada kelima modul
+    Expiring Documents <- expired_date master antara hari ini dan +warning_days
+    Expired Documents <- expired_date master sebelum hari ini
+    Need Attention <- jumlah attention layanan + Expired Documents + task overdue
+        Layanan, dokumen dan task dihitung terpisah, bukan deduplikasi per kapal
+    Completed Today <- status completed dengan completed_at pada hari ini WITA
+        Gunakan rentang lokal yang dikonversi menjadi UTC
+    Departures Today <- SPB dengan actual_departure_at pada hari ini WITA
+    SPB Pending <- jumlah berdasarkan konstanta PENDING pada model
+    Tampilkan maksimal 5 layanan aktif terbaru per modul dan tautan perhatian
+    Tampilkan maksimal 5 task overdue dengan due_at paling awal
+        Sertakan tautan detail task dan filter Overdue Only
+    Task overdue dan badge sidebar mengikuti cakupan pengguna:
+        Admin -> seluruh Task; Staff -> hanya assigned_to dirinya
+    Badge sidebar <- jumlah task pending/in_progress/in_review dalam cakupan itu
+    Untuk Staff, tampilkan My Work:
+        My Active Tasks; My Overdue Tasks; My Tasks Due Today menurut hari WITA
+        My Active Services <- total ACTIVE kelima layanan dengan PIC dirinya
+SELESAI
+
+======================================================================
+14. UNDUHAN
+======================================================================
+PROSEDUR UNDUH_DOKUMEN(induk, dokumen)
+    Pastikan login dan access-system
+    Pastikan dokumen milik layanan/Vessel pada URL; jika tidak: 404
+    Untuk versi: pastikan parent VesselDocument milik Vessel pada URL
+    Pastikan file tersedia di storage; jika tidak: 404
+    Kirim file dengan NAMA_FILE_DOKUMEN dan header private/no-store serta nosniff
+SELESAI
+
+PROSEDUR FOTO_PROFIL
+    Ambil foto pengguna login melalui endpoint terlindungi
+    Jika path/file tidak tersedia: 404
+    Sajikan dari storage privat dengan header private/no-store dan nosniff
+SELESAI
+
+PROSEDUR UNDUH_LAMPIRAN_TASK(task, lampiran)
+    Pastikan login dan access-system; pastikan task dan lampiran tersedia
+    TaskPolicy.view: Admin atau Staff pemilik assigned_to; selain itu 403
+    Pastikan lampiran.task_id = task.id pada URL; jika tidak: 404
+    Pastikan file tersedia di storage privat local; jika tidak: 404
+    Kirim file dengan nama asli, Cache-Control private/no-store dan nosniff
+SELESAI
+
+FUNGSI NAMA_FILE_DOKUMEN(dokumen, kapal, jenis)
+    Berlaku untuk surat kelima layanan, master dokumen kapal, dan versi arsip
+    Format: JenisSurat_NamaKapal_YYYY-MM-DD_ID.ext
+    Surat hasil: SPB, Izin-Bunker, Sertifikat-Keselamatan, Sijil-Awak-Kapal,
+        Surat-Laut, Pas-Besar, atau Pas-Kecil sesuai jenis layanan
+    Lampiran pendukung: awalan jenis layanan diikuti label jenis lampiran
+    Tanggal layanan <- uploaded_at; fallback created_at; konversi ke WITA
+    Tanggal master/versi <- issued_date tanpa konversi tanggal kalender;
+        fallback created_at dalam WITA, lalu archived_at untuk versi
+    Jika tanggal tidak tersedia: gunakan Tanpa-Tanggal, bukan tanggal hari ini
+    ID <- id dokumen; versi arsip menambahkan awalan V agar berbeda dari master
+    Normalisasi jenis dan nama kapal ke ASCII; selain huruf/angka menjadi tanda -
+        Pangkas tanda - pada tepi; batasi jenis 80 dan nama kapal 100 karakter
+        Nama kapal kosong setelah normalisasi -> Kapal
+    Ekstensi <- ekstensi path tersimpan; fallback nama asli
+        Izinkan pdf/jpg/jpeg/png; jika tidak dikenal gunakan bin
+    Gunakan nama yang sama untuk tampilan dan unduhan dokumen lama maupun baru
+    Path storage privat dan original_filename tetap dipertahankan
+    Nama mengikuti nama kapal saat diakses; tidak mengganti berkas secara fisik
+    Lampiran Task dan foto profil tetap memakai aturan sebelumnya
+    KEMBALIKAN nama hasil format
+SELESAI
+
+======================================================================
+15. TASK MONITORING, OTOMATISASI, HISTORY, DAN LAMPIRAN
+======================================================================
+STRUKTUR DATA TASK
+    tasks:
+        id; taskable_type/taskable_id nullable; vessel_id/client_id nullable
+        title; description nullable; task_key nullable
+        assigned_to nullable; created_by; priority; status; progress default 0
+        start_at/due_at/started_at/completed_at nullable; notes nullable
+        is_system_generated default false; created_at; updated_at
+    task_histories:
+        task_id; event; from_status/to_status nullable; changed_by nullable
+        notes/metadata nullable; created_at
+    task_attachments:
+        task_id; file_path; original_filename; uploaded_by; created_at
+    Task morphTo taskable; setiap model layanan morphMany tasks
+    Task belongsTo Vessel, Client, assignedStaff dan creator
+    Task hasMany histories dan attachments
+    Unique(taskable_type, taskable_id, task_key) mencegah duplikasi otomatis
+    Index mendukung relasi layanan, status/deadline, status/completed_at,
+        serta assignment/status
+    Nomor tampilan <- "TSK-" + id dengan padding minimal 6 digit
+SELESAI
+
+KONSTANTA TASK
+    STATUS <- pending, in_progress, in_review, completed, cancelled
+    ACTIVE <- pending, in_progress, in_review
+    PRIORITY <- low, medium, high, urgent
+    NEXT <- pending:in_progress, in_progress:in_review, in_review:completed
+    start_at = rencana mulai; started_at = waktu aktual task mulai dikerjakan
+    Tanggal input/tampilan WITA mengikuti config spb.timezone; simpan UTC
+    Overdue merupakan kondisi terhitung, bukan nilai status di database
+SELESAI
+
+FUNGSI TASK_OVERDUE(task)
+    Kembalikan status termasuk ACTIVE DAN due_at tersedia DAN due_at < sekarang
+SELESAI
+
+PROSEDUR TAMPILKAN_TASK_MONITORING(filter)
+    Pastikan Admin/Staff aktif saat akses halaman dan aksi Livewire
+    Cakupan awal: Admin semua Task; Staff hanya assigned_to = id dirinya
+    Filter input tidak boleh memperluas cakupan tersebut
+    Muat task beserta layanan polymorphic, Vessel, Client dan Assigned Staff
+    Jika search diisi:
+        Cari judul, id dari nomor TSK, nama kapal, nama Client atau nomor layanan
+        Gunakan query terparameterisasi
+    Terapkan filter status, priority, staff, service type dan Vessel
+        Pilihan filter Staff dan tombol Create Task hanya ditampilkan kepada Admin
+        Staff "unassigned" berarti assigned_to NULL
+        Service type hanya dari registry kelima layanan
+    Jika Due Date diisi:
+        Validasi tanggal; jika tidak valid: hasil kosong
+        Ubah awal/akhir hari WITA menjadi UTC; filter due_at dalam rentang
+    Jika Overdue Only aktif: terapkan TASK_OVERDUE
+    Urutkan updated_at terbaru lalu id terbesar; paginate 10 task
+    Perubahan filter -> reset halaman pertama
+    Tampilkan nomor/judul, nomor dan tautan layanan, Vessel, Client, PIC,
+        priority, status, due_at, progress, last update dan aksi detail
+    Jika hasil kosong: tampilkan pesan kosong
+    Membuka/refresh halaman hanya membaca data, tidak membuat task otomatis
+SELESAI
+
+PROSEDUR SUMMARY_TASK
+    rentang_hari <- awal/akhir hari WITA dikonversi ke UTC
+    Total Active Tasks <- jumlah task dengan status ACTIVE
+    Tasks Due Today <- jumlah task ACTIVE dengan due_at dalam rentang_hari
+    Overdue Tasks <- jumlah task yang memenuhi TASK_OVERDUE
+    Completed Today <- jumlah status completed dengan completed_at dalam rentang
+    Summary mengabaikan filter daftar tetapi tetap mengikuti cakupan role
+        Admin semua Task; Staff hanya assigned_to dirinya
+    Admin juga mendapat Unassigned Tasks <- jumlah ACTIVE dengan assigned_to NULL
+SELESAI
+
+PROSEDUR SIMPAN_TASK(task_opsional, input)
+    Form yang sama membuat task manual dan mengedit metadata task manual/otomatis
+    Pastikan Admin aktif melalui TaskPolicy.create/update; trim string dan ubah string kosong menjadi NULL
+    Validasi judul wajib maksimum 255, priority valid
+    Description/notes opsional maksimum 5000; assignment harus user staff active
+    Vessel/Client yang dipilih harus tersedia
+    Start/due opsional dengan format tanggal-jam; jika keduanya diisi:
+        due_at tidak boleh sebelum start_at
+    MULAI TRANSAKSI
+        Jika related_service dipilih:
+            Pecah format "jenis:id"; validasi jenis registry dan id angka
+            Ambil dan kunci layanan terkait
+        Jika existing: ambil dan kunci ulang task; selain itu: siapkan task baru
+        Otorisasi create/update diulang pada task terkunci
+        Jika assignment baru/berubah: kunci dan cek ulang Staff tujuan masih aktif
+        Jika task otomatis ATAU task sudah completed/cancelled:
+            Larang perubahan related_service
+        Jika task baru atau related_service berubah:
+            Layanan yang dipilih harus masih ACTIVE menurut model layanan
+        reassign_service <- task otomatis DAN input assigned_to tersedia
+            DAN assigned_to berbeda dari nilai task sebelumnya
+        Jika reassign_service:
+            Pastikan layanan terkait tersedia dan masih ACTIVE
+            Pastikan task masih ACTIVE; task otomatis terminal tidak boleh ganti PIC
+            Tolak PIC kosong; tujuan harus Staff aktif
+        Jika layanan dipilih: Vessel dan Client mengikuti data layanan
+        Jika tanpa layanan tetapi Vessel dipilih: Client mengikuti Vessel
+        Selain itu: gunakan pilihan Vessel/Client yang divalidasi
+        Konversi start_at/due_at WITA ke UTC; simpan metadata yang diizinkan
+        Jika baru:
+            created_by <- pengguna aktif; status <- pending; progress <- 0
+            is_system_generated <- false; task_key tetap NULL
+            Abaikan input palsu status/progress/pembuat/penanda otomatis
+        Simpan task
+        Catat created untuk task baru
+        Catat assigned/reassigned jika assignment berubah
+        Jika assignment existing berubah, tambahkan event task_reassigned:
+            from_staff, to_staff, changed_by, timestamp; history lama tetap disimpan
+        Catat due_date_changed dan priority_changed untuk perubahan existing
+        Catat updated beserta before/after untuk perubahan metadata existing
+        Jika reassign_service:
+            Jalankan REASSIGN_PIC_LAYANAN dengan Staff tujuan dalam transaksi yang sama
+            PIC layanan dan task otomatis aktif disinkronkan bersama
+        Penggantian petugas task manual tidak memanggil REASSIGN_PIC_LAYANAN
+    Commit; jika gagal: rollback perubahan task, layanan, dan history terkait
+    Pada halaman Create: arahkan ke detail task
+    Task terminal boleh diperbarui metadatanya, kecuali PIC task otomatis;
+        status, progress, started_at dan completed_at tidak diubah oleh form
+SELESAI
+
+PROSEDUR UBAH_STATUS_TASK(task, tujuan, catatan)
+    Pastikan Admin/Staff aktif; validasi tujuan dan catatan maksimum 5000
+    MULAI TRANSAKSI; kunci task dan baca status terbaru
+        TaskPolicy.work: Admin atau Staff yang saat ini assigned_to task
+        Jika tujuan cancelled: wajib Admin melalui TaskPolicy.update
+        Pastikan status asal termasuk ACTIVE
+        Izinkan tujuan = NEXT[asal] ATAU cancelled
+        Selain itu: tolak transisi, tanpa perubahan task/history
+        Simpan status tujuan
+        Jika in_progress: started_at <- sekarang
+        Jika completed: progress <- 100; completed_at <- sekarang
+        Catat status_changed untuk in_progress/in_review
+        Catat completed atau cancelled sesuai tujuan
+        Simpan status asal/tujuan, petugas dan catatan
+    Commit; tidak mengubah status layanan atau membuka kembali task terminal
+SELESAI
+
+PROSEDUR UBAH_PROGRESS_TASK(task, progress)
+    Pastikan Admin/Staff aktif; validasi integer 0 sampai 99
+    MULAI TRANSAKSI; kunci task; otorisasi TaskPolicy.work
+        Pastikan status termasuk ACTIVE
+        Jika progress berubah: simpan dan catat progress_changed, before/after
+        Jika sama: tidak menambah history
+    Commit; nilai 100 hanya ditetapkan melalui aksi completed
+SELESAI
+
+MAPPING TASK OTOMATIS BERDASARKAN STATUS LAYANAN
+    SPB:
+        draft -> Verifikasi dan lengkapi dokumen SPB
+        ready_to_apply -> Ajukan SPB ke Inaportnet
+        applied -> Follow up hasil pengajuan SPB
+        revision_required -> Perbaiki dokumen SPB
+        ready_to_sail -> Konfirmasi keberangkatan kapal
+    Sertifikat Keselamatan:
+        draft -> Verifikasi dokumen sertifikat
+        ready_to_apply -> Ajukan permohonan sertifikat
+        under_review -> Follow up permohonan
+        revision_required -> Lengkapi revisi sertifikat
+        inspection_scheduled -> Koordinasi pemeriksaan kapal
+        waiting_for_issuance -> Follow up penerbitan sertifikat
+        ready_for_handover -> Serahkan sertifikat ke client
+    Izin Bunker:
+        draft -> Lengkapi dokumen izin bunker
+        ready_to_apply -> Ajukan izin bunker
+        under_review -> Follow up persetujuan bunker
+        revision_required -> Perbaiki pengajuan bunker
+        approved -> Konfirmasi jadwal bunker
+        bunker_scheduled -> Konfirmasi kegiatan bunker selesai
+    Sijil Awak Kapal:
+        draft -> Verifikasi data dan dokumen crew
+        ready_to_apply -> Ajukan pengurusan sijil
+        under_review -> Follow up hasil sijil
+        revision_required -> Lengkapi revisi sijil
+        ready_to_update_crew -> Terapkan perubahan crew ke Vessel
+    Surat Laut / Pas Besar / Pas Kecil:
+        draft -> Verifikasi dokumen kebangsaan kapal
+        ready_to_apply -> Ajukan Surat Laut / Pas Besar / Pas Kecil
+        under_review -> Follow up hasil pengajuan
+        revision_required -> Lengkapi revisi dokumen kebangsaan
+        ready_for_handover -> Serahkan dokumen ke client
+SELESAI
+
+PROSEDUR SINKRONKAN_TASK_LAYANAN(layanan, petugas_opsional)
+    Dipanggil sesudah aksi workflow berhasil, masih dalam transaksi layanan
+        Termasuk simpan draft, perubahan data dan perpindahan status
+        Gunakan status akhir; status antara dalam satu aksi tidak membuat task
+    MULAI TRANSAKSI; kunci dan baca ulang layanan
+        terminal <- status termasuk TERMINAL pada model layanan
+        judul <- mapping jenis layanan dan status, atau NULL
+        entry <- id history terbaru yang masuk ke status saat ini,
+            dengan from_status NULL atau berbeda dari to_status; default 0
+        task_key <- status + ":" + entry
+        Kunci task ACTIVE yang terkait layanan
+        Untuk setiap task ACTIVE:
+            Jika layanan terminal:
+                Ubah task manual maupun otomatis menjadi cancelled
+                Catat alasan "service_" + status layanan
+            Selain itu jika task otomatis dengan task_key berbeda:
+                Ubah menjadi cancelled; catat alasan service_progressed
+            Task manual tetap aktif selama layanan belum terminal
+            Penutupan ini tidak memaksakan progress=100 atau completed_at
+        Jika terminal atau judul tidak tersedia: selesai tanpa membuat task
+        PIC <- kandidat pertama yang merupakan staff active:
+            1. assigned_staff_id layanan
+            2. created_by layanan jika kandidat pertama tidak memenuhi syarat
+            3. NULL jika keduanya bukan Staff aktif
+        Jangan assign task baru ke Admin atau Staff inactive
+        Deadline <- due_at layanan jika ada
+            SPB tanpa due_at: estimated_departure_at
+            Bunker tanpa due_at: scheduled_at
+            Selain itu: NULL; tidak menambahkan deadline arbitrer
+        defaults <- PIC, deadline, priority layanan
+        Cari task dengan layanan + task_key yang sama
+        Jika sudah ada:
+            Jika masih ACTIVE: jalankan SINKRONKAN_DEFAULT_TASK
+            Jika sudah ditutup: pertahankan status; tidak reopen/duplikasi
+            Selesai
+        Buat task dengan judul, task_key, Vessel, Client dan created_by layanan
+            assigned_to/PIC, due_at dan priority mengikuti defaults
+            status pending; progress 0; is_system_generated true
+        Catat created dengan status layanan dan snapshot defaults
+        Jika PIC tersedia: catat assigned
+    Commit; kegagalan ikut menggagalkan transaksi workflow pemanggil
+    Entry history membedakan siklus revisi berulang pada layanan yang sama
+SELESAI
+
+PROSEDUR SINKRONKAN_DEFAULT_TASK(task, defaults_baru)
+    Ambil snapshot defaults terakhir dari event created/service_defaults_changed
+    Jika snapshot sama dengan defaults_baru DAN assigned_to task sama dengan PIC baru:
+        Selesai tanpa perubahan
+    Untuk assigned_to, due_at dan priority:
+        Jika field assigned_to: selalu ikuti PIC dari defaults_baru
+            Berlaku juga saat snapshot lama tidak tersedia atau PIC task berbeda
+        Jika field due_at/priority: ikuti defaults_baru hanya jika snapshot lama ada
+            DAN nilai task saat ini masih sama dengan defaults lama
+        Jika field mengikuti defaults DAN nilainya berbeda dari defaults_baru:
+            Perbarui field mengikuti defaults baru
+            Catat assigned/reassigned, due_date_changed atau priority_changed
+                dengan alasan service_updated dan nilai before/after
+        Pertahankan perubahan manual due_at/priority yang berbeda dari defaults lama
+        Tanpa snapshot lama, pertahankan due_at/priority yang sudah ada
+    Simpan task; catat service_defaults_changed beserta snapshot defaults baru
+    Prosedur ini hanya dipanggil untuk task otomatis ACTIVE pada tahap saat ini
+    PIC task manual dan task terminal tidak diubah oleh sinkronisasi defaults
+SELESAI
+
+PROSEDUR SINKRONISASI_LAYANAN_EXISTING
+    Jalankan perintah Artisan: tasks:sync-services
+    Untuk setiap model pada registry kelima layanan:
+        Iterasi berdasarkan id dalam batch 100
+        Jalankan SINKRONKAN_TASK_LAYANAN dengan petugas NULL (System)
+        Tambah jumlah layanan yang diproses
+    Tampilkan jumlah layanan tersinkronisasi
+    Perintah dapat diulang tanpa menggandakan task tahap yang sama
+SELESAI
+
+PROSEDUR LAMPIRKAN_FILE_TASK(task, file)
+    Pastikan Admin/Staff aktif; validasi MIME dan ekstensi PDF/JPG/JPEG/PNG maksimum 2048 KB
+    MULAI TRANSAKSI; kunci task; otorisasi TaskPolicy.work
+        Simpan file privat local pada tasks/{task.id} dengan nama storage
+        Simpan task_attachments dengan nama asli aman dan uploaded_by
+        Perbarui updated_at task; catat attachment_added beserta attachment_id
+    Jika gagal: rollback baris database dan hapus file baru
+    Jika berhasil: file dapat diunduh melalui endpoint task terlindungi
+    Lampiran task adalah berkas pekerjaan internal, bukan pengganti dokumen layanan
+SELESAI
+
+PROSEDUR SIMPAN_CATATAN_TASK(task, catatan)
+    Pastikan access-system; validasi catatan wajib berupa teks maksimum 5000
+    MULAI TRANSAKSI; kunci task; otorisasi TaskPolicy.work
+        Perbarui notes; catat notes_updated dengan petugas dan isi catatan
+    Commit; tidak mengubah assignment, priority, atau status
+SELESAI
+
+PROSEDUR DETAIL_TASK
+    Kunci identitas task pada state Livewire; pastikan Admin/Staff aktif pada setiap request
+    TaskPolicy.view diperiksa saat mount dan ketika memuat task terbaru
+        Admin dapat melihat semua; Staff hanya assigned_to dirinya
+        Setelah reassignment, Staff lama tidak dapat melanjutkan akses/aksi
+    Muat task, layanan, Vessel, Client, Assigned Staff, history/petugas dan lampiran
+    Tampilkan nomor, judul, tipe task, relasi layanan, priority/status,
+        rencana mulai, deadline, mulai aktual, selesai, progress dan last update
+    Tampilkan description, notes dan penanda overdue jika sesuai
+    Form edit metadata hanya untuk Admin; pilihan layanan otomatis/terminal dikunci
+    Label assignment task otomatis: PIC Service (berlaku juga untuk task otomatis aktif)
+        Pilihan PIC otomatis tidak menyediakan opsi kosong
+    Label assignment task manual: Petugas Task
+    Jika ACTIVE: tampilkan aksi tahap berikutnya, Update Progress dan Simpan Catatan
+        Tombol Cancel Task hanya untuk Admin
+    Backend tetap memvalidasi transisi/progress meskipun tombol disembunyikan
+    Tampilkan upload dan tautan download lampiran
+    Tampilkan timeline urut id menaik (terlama dahulu):
+        event, status asal/tujuan, petugas atau System, waktu WITA,
+        catatan dan rincian metadata perubahan
+    Berhasil -> muat ulang data task/history
+    Gagal -> tampilkan error di atas form edit/progress/catatan-status/upload terkait
+        Jika simpan metadata gagal, pertahankan form edit terbuka
+SELESAI
+
+======================================================================
+16. OPERATIONS REPORTS, FILTER, AGREGASI, XLSX, DAN CETAK
+======================================================================
+PROSEDUR BUKA_REPORTS(pengguna, query_string)
+    Pastikan login dan access-system pada setiap request
+    Default periode <- awal sampai akhir bulan berjalan di Asia/Makassar
+    Default document_scope <- current; filter tambahan <- kosong
+    Ambil hanya kunci filter yang diizinkan; validasi query_string
+    Simpan filter valid sebagai applied_filters yang dikunci dari perubahan client
+    Tampilkan tab Summary, Services dan Vessels kepada kedua role
+    Tab Staff / Task Performance hanya untuk Admin
+    State tab dikunci; selectTab(staff) memeriksa access-admin di backend
+    Gunakan applied_filters untuk seluruh agregasi, tabel, dan tautan ekspor
+    Setiap tabel memiliki paginator sendiri, 10 baris per halaman
+    Jika kosong: tampilkan "Tidak ada data laporan untuk periode/filter yang dipilih."
+SELESAI
+
+PROSEDUR TERAPKAN_FILTER_REPORTS(input, form = filters)
+    errorForm <- documents jika berasal dari filter dokumen; selain itu filters
+    Reset pesan validasi sebelumnya; errorForm dikunci dari perubahan client
+    Validasi date_from/date_to wajib Y-m-d dan akhir tidak sebelum awal
+    Validasi service_type termasuk salah satu dari lima layanan
+    Validasi status termasuk status layanan yang dikenal
+    Validasi vessel_id/client_id ada; staff_id adalah pengguna role staff
+    Validasi document_type dan document_status sesuai konstanta master dokumen
+    Validasi document_scope adalah current, versions, atau all
+    Validasi expiry_from/expiry_to opsional dan urutan tanggal jika keduanya diisi
+    Jika gagal: pertahankan hasil applied_filters sebelumnya
+        Tampilkan kesalahan di atas form sesuai errorForm
+    Jika berhasil: normalisasi nilai menjadi string; null menjadi string kosong
+        Ganti applied_filters; reset enam paginator dan cache computed laporan
+    Mengedit input saja belum mengubah hasil sebelum Apply
+    Reset -> isi default bulan berjalan dan terapkan kembali
+SELESAI
+
+FUNGSI QUERY_LAYANAN_REPORTS(filter, kolom_periode = created_at, detail = false)
+    awal_UTC <- awal hari date_from WITA dikonversi UTC
+    akhir_UTC <- akhir hari date_to WITA dikonversi UTC
+    UNTUK SPB, Safety Certificate, Bunker, Sijil, Ship Nationality:
+        Lewati tipe yang tidak cocok jika service_type diisi
+        Filter kolom_periode di antara awal_UTC dan akhir_UTC
+        Filter status, vessel_id, client_id, assigned_staff_id bila diisi
+        Pilih kolom bersama dan alias report_type
+        is_active <- status termasuk ACTIVE milik model layanan tersebut
+        duration_seconds <- completed_at - created_at hanya jika completed
+            dan completed_at tidak sebelum created_at; selain itu NULL
+        is_attention <- aturan attention layanan yang sudah tersedia
+            SPB: revision_required
+            Safety/Bunker/Ship Nationality: scope needsAttention masing-masing
+            Sijil: evaluasi needsAttention pada layanan aktif per batch 100
+                dengan relasi readiness dan pemeriksaan berkas yang dibutuhkan
+        Jika detail: tambahkan kolom khusus tipe layanan
+    Gabungkan query dengan UNION ALL tanpa menghapus baris antartipe
+    Untuk tabel detail: gabungkan nama Vessel, Client, dan Assigned Staff
+        Urutkan created_at menurun, report_type, id menurun
+    KEMBALIKAN query; hitung agregasi di database
+SELESAI
+
+FUNGSI KPI_REPORTS(filter)
+    data <- QUERY_LAYANAN_REPORTS(filter)
+    total <- COUNT(data)
+    active <- SUM(is_active)
+    completed <- COUNT(status = completed)
+    cancelled <- COUNT(status = cancelled)
+    denominator <- total - cancelled
+    completion_rate <- 0 jika denominator = 0
+        selain itu ROUND(completed / denominator * 100, 1)
+    average_duration <- AVG(duration_seconds yang tidak NULL)
+    Tampilkan durasi dalam hari/jam; jika tidak tersedia tampilkan tanda pisah
+    service_attention <- SUM(is_attention)
+    expired_documents <- jumlah dokumen current expired sesuai filter dokumen/Vessel
+    overdue_tasks <- jumlah task overdue sesuai filter task
+    needs_attention <- service_attention + expired_documents + overdue_tasks
+    Angka attention adalah penjumlahan kategori, bukan jumlah Vessel unik
+    KEMBALIKAN seluruh KPI
+SELESAI
+
+PROSEDUR RINGKASAN_DAN_TREN_REPORTS(filter)
+    Kelompokkan layanan menurut report_type untuk total, active, completed,
+        rejected, cancelled, dan rata-rata durasi
+    Kelompokkan distribusi status untuk tampilan:
+        draft -> Draft; ready_to_apply -> Ready
+        applied/under_review -> Under Review; revision_required -> Revision
+        completed -> Completed; rejected -> Rejected; cancelled -> Cancelled
+        failed_to_sail -> Failed; lainnya -> Operational / Handover
+    Pengelompokan tampilan tidak mengubah status asli di database
+    Query tren dibuat: periode diterapkan ke created_at
+    Query tren selesai: periode diterapkan ke completed_at dan status completed
+    Terapkan filter non-tanggal yang sama pada kedua query
+    Kelompokkan berdasarkan bulan WITA; gabungkan jumlah dibuat dan selesai
+    Tampilkan bulan yang memiliki data
+    Layanan selesai dalam tren dapat dibuat sebelum periode yang dipilih
+SELESAI
+
+PROSEDUR TABEL_LAYANAN_REPORTS(filter)
+    Gunakan query layanan detail dengan periode created_at
+    Tampilkan identitas layanan, Vessel, Client, PIC, status, priority, dan tanggal
+    Jika satu service_type dipilih, tampilkan rincian khusus:
+        SPB: tujuan, estimasi/aktual berangkat, nomor SPB
+        Safety: jenis permohonan, nomor sertifikat, tanggal kedaluwarsa
+        Bunker: supplier, jenis, jumlah/unit, jadwal dan aktual bunker
+        Sijil: jenis proses dan jumlah awak terkait yang belum removed
+        Ship Nationality: jenis dokumen, permohonan, nomor hasil terbit
+    Tautan detail mengarah ke halaman layanan asal
+SELESAI
+
+FUNGSI CAKUPAN_VESSEL_REPORTS(filter)
+    Ambil Vessel; filter vessel_id dan client_id bila diisi
+    Jika service_type, status, atau staff_id diisi:
+        Batasi ke Vessel yang mempunyai layanan sesuai filter dan periode
+    Data Vessel merupakan inventaris saat ini, bukan cohort created_at Vessel
+    KEMBALIKAN query Vessel
+SELESAI
+
+PROSEDUR LAPORAN_VESSEL_DAN_CLIENT(filter)
+    Agregasikan layanan per Vessel; agregasikan dokumen current per Vessel
+    Gabungkan agregasi dengan cakupan Vessel agar jumlah tidak berlipat karena join
+    Tampilkan Vessel, pemilik/Client, tipe, status operasional,
+        jumlah layanan total/active/completed dan dokumen expired/expiring_soon
+    Ringkas jumlah Vessel total, berthed, sailing, dan maintenance
+    Agregasikan layanan per Client serta tanggal layanan terakhir dalam periode
+    Hitung jumlah Vessel saat ini per Client sesuai cakupan Vessel
+    Tampilkan Client yang memiliki Vessel atau layanan sesuai filter
+    Klik Client -> buka Reports dengan client_id terpilih dan filter lain dipertahankan
+    Klik Vessel -> buka rincian Vessel
+SELESAI
+
+PROSEDUR LAPORAN_DOKUMEN(filter)
+    current <- dokumen master Vessel saat ini
+    versions <- versi dokumen beserta Vessel/type dari master induknya
+    Pilih current, versions, atau UNION ALL keduanya sesuai document_scope
+    Terapkan cakupan Vessel, document_type, document_status, dan rentang expiry
+    expiry_from inklusif; expiry_to menggunakan batas sebelum hari berikutnya
+    Status memakai batas bersama VesselDocument.expirationRanges():
+        expired, expiring_soon, valid; tanggal kosong -> unknown
+    Batas kedaluwarsa mengikuti timezone aplikasi, sama dengan master dokumen
+    days_remaining <- selisih bertanda hari kalender dari hari ini ke tanggal expiry
+        Jika expiry kosong: NULL
+    Label Current/Version menunjukkan edisi, terpisah dari status kedaluwarsa
+    Ringkasan dokumen dan KPI expired selalu memakai current saja
+        meskipun tabel diatur versions atau all
+    Dokumen tidak dibatasi created_at oleh periode layanan
+    Tampilkan nomor, jenis, Vessel, tanggal terbit/kedaluwarsa, status, dan edisi
+    Urutkan expired_date, edisi, id; jangan pilih path berkas privat
+SELESAI
+
+FUNGSI QUERY_TASK_REPORTS(filter)
+    Filter task.created_at menggunakan rentang hari WITA yang dikonversi UTC
+    Jika pengguna Staff: selalu batasi task.assigned_to ke dirinya
+    Terapkan task.vessel_id, task.client_id, task.assigned_to bila dipilih
+    Jika service_type atau status layanan dipilih:
+        Batasi relasi polimorfik ke layanan yang cocok dalam periode
+        Abaikan filter PIC layanan untuk pencocokan relasi ini
+        Tetap filter assigned_to task untuk mengukur petugas task yang tercatat
+        Task manual/terminal atau fallback PIC dapat berbeda dari PIC layanan
+        Task otomatis aktif mengikuti PIC Staff aktif layanan saat disinkronkan
+    overdue <- task ACTIVE dan due_at sebelum sekarang
+    due_today <- task ACTIVE dan due_at dalam hari ini WITA
+    completed <- status task completed dalam cohort created_at yang dipilih
+    KEMBALIKAN query dan kondisi agregasi
+SELESAI
+
+PROSEDUR LAPORAN_STAFF_DAN_TASK(filter)
+    Wajib access-admin; rows(staff/tasks) dan query performance memeriksa izin
+    Agregasikan layanan menurut assigned_staff_id
+    Agregasikan task menurut assigned_to: active, completed, overdue, due_today
+    Gabungkan dengan pengguna role staff
+    Jika tidak ada filter PIC: sertakan kelompok Unassigned untuk PIC kosong
+    Tampilkan hanya kelompok yang mempunyai layanan atau task sesuai filter
+    Tampilkan active/completed services, rata-rata durasi, dan empat jumlah task
+    Need Attention staff <- attention layanan + overdue task; tidak termasuk dokumen
+    Tabel overdue menampilkan hanya task ACTIVE lewat deadline
+        dengan nama PIC/Vessel; urutkan due_at lalu id
+    Klik task -> buka detail task
+    Completed Tasks bukan jumlah yang selesai hari ini
+SELESAI
+
+PROSEDUR EKSPOR_XLSX_REPORTS(pengguna, kind, query_string)
+    Pastikan login dan access-system
+    Untuk staff, tasks, atau percobaan alias staff-performance: wajib access-admin
+        Staff yang mengetik URL langsung tetap mendapat 403
+    Staff dapat ekspor services, vessels, documents, dan clients
+    Pastikan kind salah satu services, vessels, documents, clients, staff, tasks
+        Jika tidak dikenal: 404; tasks merujuk tabel overdue
+    Validasi filter dengan ReportFilters yang sama seperti halaman Reports
+    Bentuk query dan daftar kolom dengan ReportService yang sama
+    Tombol Export XLSX memakai ikon spreadsheet berwarna hijau
+    Nama file <- kind + "-report-" + date_from + "_" + date_to + ".xlsx"
+    Bentuk paket ZIP Open XML berisi workbook, relasi, dan worksheet Report
+    Baca seluruh hasil sesuai filter dalam batch 250, tanpa batas halaman tabel
+    UNTUK setiap nilai sel:
+        Format datetime WITA; tanggal dokumen tetap tanggal tanpa konversi jam
+        Simpan angka sebagai nilai numerik; teks sebagai inlineStr, bukan formula
+        Pertahankan nol di depan, whitespace, dan Unicode dalam nilai teks
+        Escape XML, hapus karakter yang tidak valid, batasi teks sel 32767 karakter
+    Bekukan baris header dan aktifkan filter kolom worksheet
+    Tolak worksheet tanpa kolom, lebih dari 16384 kolom, atau lebih dari 1048576 baris
+    Flush penulisan XML setiap 250 baris agar pemrosesan tidak menumpuk seluruh data
+    Hapus file sementara setelah unduhan atau kegagalan pembuatan file
+    Ekspor kolom yang diizinkan; jangan sertakan path privat atau URL aksi/lampiran
+    Header respons: application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,
+        private/no-store, nosniff
+SELESAI
+
+PROSEDUR CETAK_REPORTS
+    Jalankan window.print untuk tab dan halaman tabel yang sedang terlihat
+    Sembunyikan navigasi, filter, tombol, dan paginator pada media cetak
+    Gunakan landscape, margin 10 mm, tabel ringkas dengan teks membungkus
+    Cetak tidak memuat semua halaman; ekspor XLSX mencakup seluruh hasil filter
+SELESAI
+
+======================================================================
+17. PENGARSIPAN LAYANAN DAN DOKUMEN
+======================================================================
+PROSEDUR ARSIP_LAYANAN_SESUAI_WORKFLOW(layanan, aksi)
+    Jalankan validasi status, kelengkapan, dan transaksi pada workflow terkait
+    SPB: penerbitan izin/ready_to_sail belum menutup layanan
+        Setelah konfirmasi keberangkatan dan hasil akhir:
+            status <- completed jika berhasil; failed_to_sail jika gagal
+            Isi completed_at dan archived_at
+    Bunker: setelah aktual bunker dan bukti persetujuan tervalidasi:
+        Catat bunker_completed lalu completed; isi completed_at dan archived_at
+    Safety Certificate dan Ship Nationality:
+        Penerbitan hasil -> ready_for_handover
+        Setelah serah terima -> completed; isi completed_at dan archived_at
+    Sijil: persetujuan -> ready_to_update_crew
+        Setelah perubahan awak diterapkan -> completed
+        Isi completed_at dan archived_at dalam transaksi perubahan awak
+    Penolakan dan pembatalan yang didukung workflow juga mengisi archived_at
+    Simpan history/petugas; sinkronkan Task sesuai aturan bagian 15
+    Task aktif terkait layanan terminal ditutup cancelled dengan alasan status layanan
+        Task yang sudah terminal tetap dipertahankan
+SELESAI
+
+PROSEDUR PERTAHANKAN_DOKUMEN_LAYANAN_TERARSIP(layanan)
+    archived_at menandai arsip pada record layanan, bukan pada setiap file
+    Pertahankan record dokumen, lampiran, snapshot referensi, hasil, dan history
+    Pertahankan berkas di lokasi storage privat yang sudah digunakan
+    Layanan selesai tidak otomatis menghapus berkas atau memindahkannya ke folder arsip
+    Akses kembali melalui daftar/detail layanan dan Reports sesuai filter/periode
+    Download tetap melalui endpoint terlindungi dengan validasi akses dan keberadaan file
+    Pengarsipan ini tidak otomatis membuat ZIP, backup, atau salinan ke penyimpanan lain
+SELESAI
+
+PROSEDUR ARSIP_VERSI_MASTER_DOKUMEN_SAAT_DIGANTI(master, hasil_baru)
+    Untuk hasil Safety Certificate atau Surat Laut/Pas Besar/Pas Kecil:
+        Jika mengganti master: archiveCurrent menyimpan snapshot versi lama
+        Simpan metadata, path lama, sumber layanan, archived_at, dan archived_by
+        Tandai versi lama superseded; pertahankan berkas lama
+        Perbarui master dengan dokumen hasil baru sesuai workflow penerbitan
+    Riwayat versi master berbeda dari arsip record layanan
+    SPB dan Izin Bunker tetap menyimpan dokumennya pada layanan masing-masing
+        Penyelesaian keduanya tidak otomatis membuat VesselDocumentVersion
+SELESAI
+
+======================================================================
+18. STAFF MANAGEMENT, OTORISASI, DAN ASSIGNMENT
+======================================================================
+STRUKTUR DATA PENGGUNA_DAN_AUDIT
+    Tetap gunakan users dan User; tidak ada tabel admin/staff terpisah
+    role: admin atau staff; status: active atau inactive
+    Migration menambah users.status default active dan index(role, status)
+        Role/data pengguna existing tidak diubah; FK operasional dipertahankan
+    User.isAdmin/isStaff/isActive memeriksa nilai role/status
+    User.assignable <- role staff DAN status active
+    Role/status tidak termasuk atribut fillable identitas akun
+        Backend menetapkannya secara eksplisit pada operasi yang berwenang
+    staff_histories: user_id, changed_by, event, metadata JSON, created_at
+        FK pengguna dan petugas memakai restrictOnDelete
+SELESAI
+
+PROSEDUR SIDEBAR_BERDASARKAN_ROLE
+    Gunakan satu layout dashboard bersama
+    Kedua role: Overview, layanan, Vessel, Client, Reports, Account Settings
+    Admin: Task Monitoring dan Management -> Staff Management
+    Staff: My Tasks; Staff Management tidak ditampilkan
+    Badge task mengikuti cakupan Admin/global atau Staff/pemilik
+    Sidebar dan pengaturan akun menampilkan label role pengguna sebenarnya
+    Visibilitas menu tidak menggantikan gate/policy backend
+SELESAI
+
+PROSEDUR DAFTAR_STAFF(search, status)
+    Wajib access-admin pada route, boot Livewire dan setiap aksi pengelolaan
+    Query hanya users.role = staff; Admin tidak menjadi target pengelolaan
+    Summary: Total Staff, Active Staff, Inactive Staff, Staff With Active Tasks
+    Cari nama/username/email; filter status; reset paginator saat filter berubah
+    Ambil jumlah task aktif/overdue dan layanan aktif lewat subquery agregasi
+    Urutkan nama; paginate 10 pengguna
+    Tampilkan identitas, email/phone, status, active/overdue tasks, active services
+    Jika inactive masih memiliki pekerjaan: tampilkan warning beserta jumlahnya
+    Aksi: Add Staff, Edit, Activate/Deactivate, View Workload, Unassigned Work
+    Pilihan PIC baru hanya dari User.assignable
+SELESAI
+
+PROSEDUR SIMPAN_STAFF(existing_opsional, input, foto_opsional)
+    Wajib access-admin; target existing harus Staff, bukan Admin
+    Normalisasi username/email ke huruf kecil dan trim
+    Reuse aturan dan pesan RegisterRequest; unique mengecualikan id existing
+    Nama, username, email wajib; telepon/foto opsional
+    Staff baru: password dan konfirmasi wajib menurut kebijakan aplikasi
+    Edit Staff: password tidak diubah; status active/inactive wajib valid
+    Simpan foto baru privat jika ada; kegagalan penyimpanan menghentikan aksi
+    MULAI TRANSAKSI
+        Kunci ulang existing atau buat User baru; cek lagi target bukan Admin
+        Ambil snapshot nama, username, email, phone, status
+        Perbarui identitas; email berubah -> email_verified_at NULL
+        Hanya saat create: simpan password melalui cast hash
+        Jika upload tersedia: ganti profile_picture_path
+        Backend menetapkan role = staff
+        Create selalu status = active; edit memakai status tervalidasi
+        Simpan akun; catat staff_created atau staff_updated beserta before/after
+        Jika status existing berubah: catat staff_activated/staff_deactivated
+    Commit; jika gagal: rollback dan hapus foto baru
+    Jika berhasil mengganti foto: hapus foto lama
+    Akun Staff baru tidak auto-login; session Admin tetap dipakai
+    Tutup form; kosongkan password/foto form; muat ulang daftar dan summary
+SELESAI
+
+PROSEDUR UBAH_STATUS_STAFF(staff_id, tujuan)
+    Wajib access-admin; validasi tujuan active/inactive
+    MULAI TRANSAKSI; kunci pengguna; tolak jika target bukan Staff
+        Jika status sama: selesai tanpa menambah event perubahan
+        Simpan status; catat staff_activated atau staff_deactivated
+    Commit; hitung active tasks, overdue tasks dan active services pengguna
+    Tampilkan jumlah pekerjaan tersisa agar Admin dapat melakukan reassignment
+    Jangan hapus pengguna, layanan, task, dokumen atau history
+    Jangan mengubah assignment historis ketika menonaktifkan pengguna
+    Request berikutnya dari akun inactive ditolak middleware akun aktif
+    Tidak ada action untuk menonaktifkan/demote Admin melalui pengelolaan ini
+        Account Settings juga tidak menerima role/status, sehingga Admin terakhir
+        tidak dapat dihilangkan melalui antarmuka pengelolaan akun yang tersedia
+SELESAI
+
+PROSEDUR LIHAT_WORKLOAD_STAFF(staff_id)
+    Wajib access-admin; id selain 0 harus menunjuk pengguna role staff
+    id = 0 berarti Unassigned Work
+    Ambil layanan ACTIVE kelima modul dengan assigned_staff_id sesuai pilihan
+    Ambil task ACTIVE dengan assigned_to sesuai pilihan; urutkan due_at
+    Untuk unassigned: masing-masing kolom assignment harus NULL
+    Tampilkan nomor/status layanan dan pilihan Reassign PIC
+    Tampilkan task aktif, penanda Overdue, tautan detail untuk View / Reassign
+SELESAI
+
+FUNGSI SIAPKAN_PIC_LAYANAN(existing_opsional, input)
+    Wajib access-system
+    Jika layanan existing: otorisasi ServicePolicy.work memakai data database terbaru
+        Tolak petugas lama setelah PIC diganti, sebelum validasi atau penyimpanan
+    Validasi assigned_staff_id nullable/integer
+    Normalisasi id kosong menjadi NULL; ambil PIC sebelumnya
+    Jika PIC tidak NULL dan merupakan assignment baru/berubah:
+        Cari dan kunci user tujuan; harus staff active atau tolak validasi
+    Jika actor Staff:
+        Pada layanan baru, PIC yang diizinkan adalah dirinya sendiri
+        Pada layanan existing, pertahankan PIC sebelumnya
+        Jika input PIC non-NULL berbeda dari yang diizinkan: tolak access-admin
+        Input kosong tidak membebaskan Staff untuk mengosongkan PIC existing
+    Jika actor Admin: gunakan pilihan PIC tervalidasi
+    Aturan wajib/opsional PIC pada masing-masing workflow tetap berlaku
+    Jalankan pemeriksaan sebelum validasi draft dan ulangi setelah layanan dikunci
+    KEMBALIKAN input dengan assigned_staff_id yang diizinkan
+SELESAI
+
+PROSEDUR REASSIGN_PIC_LAYANAN(jenis, id, staff_tujuan)
+    Wajib access-admin
+    MULAI TRANSAKSI
+        Resolve dan kunci layanan melalui TaskServiceRegistry
+        Pastikan layanan masih ACTIVE; jalankan SIAPKAN_PIC_LAYANAN
+        Jika PIC tidak berubah:
+            Tetap jalankan SINKRONKAN_TASK_LAYANAN untuk memperbaiki PIC task yang berbeda
+            Selesai tanpa menambahkan history service_reassigned
+        Simpan assigned_staff_id tanpa mengubah status layanan
+        Catat service_reassigned: from_staff, to_staff, changed_by, timestamp
+        from_status dan to_status tetap status layanan sekarang
+        Jalankan SINKRONKAN_TASK_LAYANAN sesuai tahap layanan saat ini
+        PIC task otomatis aktif mengikuti defaults PIC layanan
+        Pertahankan override manual due_at/priority sesuai SINKRONKAN_DEFAULT_TASK
+        Penugasan task manual dan task terminal tetap dipertahankan
+    Commit; pertahankan seluruh history assignment sebelumnya
+    Admin tetap wajib menjalankan workflow asli untuk perubahan status layanan
+SELESAI
+
+======================================================================
+19. ERROR FORM, VALIDASI FILE FRONTEND, DAN POPUP NOTIFIKASI
+======================================================================
+ATURAN PENYAJIAN ERROR
+    Gunakan komponen bersama form-errors di bagian paling atas form, sebelum input
+    Berlaku untuk login/registrasi, akun, Client, Vessel/dokumen, kelima layanan,
+        task, Staff Management, serta filter Reports; termasuk form dalam dialog
+    Form validasi memakai novalidate agar pesan validasi server tampil melalui komponen
+        Aturan validasi dan otorisasi server tetap berlaku
+    Input tetap dapat diberi penanda invalid dan referensi aria ke pesan field
+    Pesan tidak diduplikasi di bawah masing-masing input
+    Untuk aksi tanpa form, tampilkan error di area aksi terkait
+        Contoh: Check Readiness layanan dan perubahan status Staff
+SELESAI
+
+PROSEDUR TAMPILKAN_ERROR_FORM(errors, fields = [], exclude = [], show = true, id = form-errors)
+    Ambil seluruh pesan beserta nama field dari error bag
+    Pilih field jika fields kosong ATAU namanya cocok dengan pola pada fields
+    Buang field yang cocok dengan pola exclude
+        Dukung wildcard untuk field bertingkat, misalnya documents.*
+    Jika show false ATAU hasil pesan kosong: jangan render ringkasan error
+    Selain itu, tampilkan kotak role=alert dengan id unik untuk form
+        Judul: "Form belum dapat diproses. Periksa pesan berikut:"
+        Tampilkan seluruh pesan terpilih sebagai teks yang di-escape
+        Beri id field-error pada kelompok pesan agar dapat dirujuk oleh input
+    Saat kotak error dimasukkan ke halaman:
+        Buka elemen details yang menjadi induknya jika ada
+        Fokuskan kotak dan gulir ke posisinya agar pesan terlihat
+    Sediakan area data-file-upload-errors yang awalnya tersembunyi
+        Lindungi area dengan wire:ignore; isi pesan frontend sebagai teks aman
+SELESAI
+
+PROSEDUR ERROR_HALAMAN_DENGAN_BEBERAPA_FORM(aksi, form)
+    Simpan identitas aksi pada errorForm yang dikunci dari perubahan client
+    Reset validasi sebelumnya sebelum memproses aksi baru
+    Jalankan validasi, otorisasi, dan workflow aksi yang dipilih
+    Jika validasi gagal: tampilkan pesan hanya pada ringkasan form aksi tersebut
+    Pada wrapper aksi detail layanan:
+        Teruskan ValidationException agar pesan field tetap tersedia
+        Jika terjadi exception lain: laporkan exception ke log
+            Tambahkan error save dengan pesan proses gagal dan belum tersimpan
+            Tampilkan pada form aksi tersebut; jangan tampilkan pesan berhasil
+    Jika aksi berhasil: jalankan reset/muat ulang/pesan sukses sesuai halaman
+    Pemilihan errorForm hanya mengatur tampilan, tidak menggantikan otorisasi backend
+SELESAI
+
+PEMETAAN ERROR ANTARFORM
+    Account Settings:
+        Form password hanya menampilkan current_password/password/password_confirmation
+        Form profil mengecualikan ketiga field password tersebut
+    Detail layanan:
+        Gunakan nama aksi untuk membedakan apply, hasil, jadwal, serah terima,
+            finish, cancel, dan aksi lain yang tersedia sesuai workflow
+        Error ready tampil pada area Check Readiness
+    Detail task:
+        Pisahkan save metadata, updateProgress, dan uploadAttachment
+        Form catatan menampilkan error saveNotes atau changeStatus
+    Staff Management:
+        Form akun memakai konteks save; kegagalan simpan mempertahankan form terbuka
+        Form Reassign PIC memakai konteks reassign-jenis-id per baris layanan
+        Perubahan status memakai konteks status-id per baris Staff
+    Reports:
+        Form filter utama memakai konteks filters; filter dokumen memakai documents
+        Hasil laporan tetap memakai applied_filters terakhir jika validasi gagal
+SELESAI
+
+PROSEDUR ERROR_UPLOAD_SEBELUM_SUBMIT
+    Upload sementara dapat menghasilkan error sebelum aksi submit dijalankan
+    Pada form upload, izinkan ringkasan membaca field file miliknya
+        Dokumen layanan: documents dan documents.*
+        Lampiran task: attachment; foto Staff: picture; foto akun: profile_picture
+    Setelah submit pada form tersebut: tampilkan seluruh error dari aksi formnya
+    Error upload tetap berada di atas form pemilik file
+SELESAI
+
+PROSEDUR VALIDASI_FILE_FRONTEND(input_file, pilihan)
+    Tangkap event change sebelum handler upload atau preview memproses pilihan
+    Baca accept, data-max-file-kb, dan data-max-image-dimension bila tersedia
+        Batas ukuran mengikuti konfigurasi form; default 2048 KB
+        Foto akun, registrasi, dan Staff maksimum 4096 x 4096 piksel
+    UNTUK setiap file yang dipilih:
+        Cocokkan ekstensi yang dikenal dengan daftar accept
+        Jika browser memberi MIME type: pastikan sesuai ekstensi
+        Tolak file kosong atau ukuran melebihi batas
+        Bila batas dimensi ditentukan: baca gambar secara asinkron
+            Tolak gambar tidak terbaca atau lebar/tinggi melebihi batas
+            Lepaskan object URL setelah pemeriksaan
+    Abaikan hasil pemeriksaan lama jika pilihan berubah atau input dihapus
+    Jika gagal:
+        Kosongkan input; batalkan upload Livewire dan kosongkan properti file sementara
+        Tandai aria-invalid dan aria-describedby; tetapkan custom validity
+        Tampilkan nama file dan alasan pada ringkasan di atas form pemiliknya
+        Kirim event form-notification agar popup error juga tampil
+        Fokuskan ringkasan dan gulir ke posisinya
+    Jika lolos: teruskan event change sekali agar upload/preview biasa berjalan
+    Pemeriksaan frontend membantu pengguna; backend tetap memvalidasi isi dan akses
+SELESAI
+
+PROSEDUR SUBMIT_FORM_DENGAN_FILE(form)
+    Periksa kembali tipe/ukuran file dan state pemeriksaan dimensi
+    Jika masih ada error ATAU pemeriksaan belum selesai:
+        Cegah submit biasa maupun Livewire; fokuskan input terkait
+        Tampilkan popup alasan penolakan atau pesan tunggu pemeriksaan selesai
+    Jika semua lolos: lanjutkan proses submit dan validasi backend
+    Pilihan file dapat dibatalkan lewat tombol pada ringkasan error frontend
+    Reset form membersihkan error dan state pemeriksaan file
+    Jika input file dihapus saat render: perbarui ringkasan agar pesan lama hilang
+SELESAI
+
+PROSEDUR INISIALISASI_POPUP_NOTIFIKASI
+    Layout aplikasi menyediakan satu dialog form-notifications untuk halaman aktif
+    Jika error bag session berisi pesan: pilih popup error
+    Selain itu, kumpulkan flash sukses auth/profil/password/Client/Vessel/layanan/Staff/task
+    Baca pesan sukses tertunda dari sessionStorage lalu hapus setelah dibaca
+    Pesan awal dari session lebih diutamakan dibanding pesan tertunda
+    Inisialisasi setiap dialog sekali, termasuk setelah livewire:navigated
+SELESAI
+
+PROSEDUR NOTIFIKASI_RESPONS_LIVEWIRE(message)
+    Proses aksi yang cocok dengan wire:submit pada komponen
+        Sertakan aksi Check Readiness (ready) dan perubahan status (changeStatus)
+        Pembaruan model otomatis tidak memunculkan popup sukses
+    Setelah respons berhasil diterima:
+        Ambil error dari ringkasan data-form-error dalam HTML respons
+        Jika tidak ada: baca error validasi pada snapshot komponen
+        Jika ada error: tampilkan popup error dengan pesan unik
+        Selain itu: ambil pesan data-form-success; gunakan pesan sukses generik bila kosong
+        Jika sukses disertai redirect:
+            Simpan pesan di sessionStorage untuk ditampilkan pada halaman tujuan
+            Jika storage tidak tersedia: tampilkan pada halaman saat ini
+        Selain itu: tampilkan popup setelah render selesai
+    Jika respons HTTP gagal: cegah popup debug bawaan Livewire
+        403 -> pesan tidak memiliki izin
+        419 -> pesan sesi berakhir dan anjuran memuat ulang
+        429 -> pesan terlalu banyak permintaan dan anjuran menunggu
+        Status lain -> pesan proses gagal; jangan tampilkan detail exception backend
+    Jika koneksi gagal:
+        Anjurkan memeriksa koneksi DAN status data sebelum mencoba kembali
+    Event form-notification frontend dan livewire-upload-error juga memicu popup error
+    Pesan error/sukses inline tetap tersedia pada form sesuai halaman
+SELESAI
+
+PROSEDUR TAMPILKAN_POPUP_NOTIFIKASI(jenis, pesan)
+    Jika pesan kosong atau dialog tidak tersedia: hentikan
+    Sukses: judul Berhasil! dan ikon centang hijau
+    Error: judul Form belum berhasil diproses dan ikon tanda seru merah
+    Isi judul/daftar pesan melalui textContent agar isi pengguna tidak menjadi HTML
+    Buka dialog modal dan batalkan animasi sebelumnya
+    Jika pengguna tidak meminta reduced motion:
+        Animasikan opacity, posisi vertikal, dan skala selama 260 milidetik
+    Fokuskan tombol Mengerti; tutup melalui tombol tersebut atau Escape
+SELESAI
+
+======================================================================
+20. PETA SUMBER IMPLEMENTASI
+======================================================================
+Akses/akun: routes/web.php; app/Providers/AppServiceProvider.php;
+    app/Http/Controllers/Auth/*; AccountSettingsController; AccountPasswordController;
+    app/Http/Requests/Auth/*; UpdateAccountRequest; UpdatePasswordRequest.
+Master: resources/views/pages/dashboard/*clients.blade.php, *vessel.blade.php;
+    app/Models/Vessel.php, VesselDocument.php, VesselDocumentVersion.php.
+Route Vessel: dashboard.vessel, vessels.create, vessels.edit pada routes/web.php;
+    pengujian halaman tambah/edit pada tests/Feature/VesselTest.php.
+Layanan: app/Services/SpbWorkflow.php, SafetyCertificateWorkflow.php,
+    BunkerWorkflow.php, SijilWorkflow.php, ShipNationalityWorkflow.php,
+    dan masing-masing *ReadinessService.php.
+Pendukung: app/Services/ServiceNumber.php, VesselDocumentReadiness.php;
+    app/Models/*Service.php, *Document.php, *StatusHistory.php, Crew.php, VesselCrew.php.
+Konfigurasi: config/spb.php, safety-certificates.php, bunker.php, sijil.php,
+    ship-nationality.php, vessels.php; halaman resources/views/pages/services/*.
+Task: app/Models/Task.php, TaskHistory.php, TaskAttachment.php;
+    app/Services/TaskWorkflow.php, TaskAutomationService.php, TaskServiceRegistry.php;
+    app/Console/Commands/SyncServiceTasks.php;
+    database/migrations/2026_10_07_154724_create_tasks_tables.php.
+Dashboard: resources/views/pages/dashboard/*overview.blade.php,
+    *task-monitoring.blade.php, *task-detail.blade.php;
+    resources/views/components/dashboard/task-item.blade.php, task-form.blade.php,
+    shell.blade.php; badge diisi view composer AppServiceProvider.
+Nama surat: app/Services/DocumentFilename.php; tests/Feature/DocumentFilenameTest.php.
+Unduhan: app/Http/Controllers/*DocumentDownloadController.php,
+    VesselDocumentVersionDownloadController.php, ProfilePictureController.php,
+    TaskAttachmentDownloadController.php.
+Route Task: dashboard.task-monitoring, tasks.show, tasks.attachments.download
+    pada routes/web.php; seluruhnya memakai auth dan gate access-system.
+Pengujian Task: tests/Feature/TaskWorkflowTest.php, TaskAutomationTest.php,
+    TaskMonitoringTest.php; integrasi Overview juga pada BunkerPageTest.php.
+Reports: app/Services/ReportFilters.php, ReportService.php, XlsxReportWriter.php;
+    app/Http/Controllers/ReportExportController.php;
+    resources/views/pages/dashboard/*reports.blade.php;
+    resources/views/components/dashboard/report-table.blade.php.
+Route Reports: reports.index dan reports.export pada routes/web.php;
+    seluruhnya memakai auth dan gate access-system.
+Indeks Reports: database/migrations/2026_10_07_232107_add_reporting_date_indexes.php;
+    created_at/completed_at layanan, created_at task, expired_date dokumen/versi.
+Pengujian Reports: tests/ReportsFixtures.php; tests/Feature/ReportServiceTest.php,
+    ReportsPageTest.php, ReportExportTest.php; tests/Unit/XlsxReportWriterTest.php.
+Arsip: archived_at pada kelima *Workflow.php; versi master melalui
+    app/Models/VesselDocument.php::archiveCurrent dan VesselDocumentVersion.php.
+
+Role/akses: app/Models/User.php; app/Http/Middleware/EnsureActiveUser.php;
+    bootstrap/app.php; app/Providers/AppServiceProvider.php; app/Policies/TaskPolicy.php.
+Registrasi pertama/login: app/Http/Controllers/Auth/RegisteredUserController.php,
+    AuthenticatedSessionController.php; app/Http/Requests/Auth/RegisterRequest.php;
+    resources/views/auth/register.blade.php, login.blade.php.
+Staff/PIC: app/Services/StaffManagement.php, ServiceAssignment.php;
+    resources/views/pages/dashboard/*staff-management.blade.php;
+    route staff.index pada /dashboard/staff-management memakai access-admin.
+Migration role: database/migrations/2026_10_08_041801_add_status_and_staff_audit.php.
+Pengujian role: tests/Feature/RoleAccessTest.php; AuthenticationTest.php;
+    SpbWorkflowTest.php serta regresi Task, Reports, Account, dan kelima layanan.
+Pengujian sinkronisasi PIC: tests/Feature/ServiceAssignmentTest.php;
+    TaskAutomationTest.php dan TaskWorkflowTest.php.
+Error form: resources/views/components/form-errors.blade.php;
+    resources/views/components/auth/input.blade.php;
+    resources/views/components/dashboard/task-form.blade.php;
+    resources/views/auth/*, resources/views/pages/account/settings.blade.php,
+    resources/views/pages/dashboard/*, resources/views/pages/services/*.
+Pengujian error form: tests/Feature/FormErrorsTest.php; mencakup posisi pesan,
+    pemisahan antarform, error upload sebelum submit, dan escaping pesan.
+Validasi file frontend: resources/js/file-upload-validation.js;
+    resources/views/components/form-errors.blade.php;
+    resources/views/components/dashboard/service-uploads.blade.php,
+    spb-uploads.blade.php, safety-issued-fields.blade.php;
+    data-max-file-kb dan data-max-image-dimension pada input file terkait.
+Popup: resources/js/form-notifications.js;
+    resources/views/components/form-notifications.blade.php;
+    resources/views/layouts/app.blade.php; data-form-error dan data-form-success.
+Registrasi handler frontend: resources/js/app.js.
+Pengujian frontend: tests/Unit/FileUploadValidation.test.js, FormNotifications.test.js;
+    notifikasi session/error juga pada tests/Feature/FormErrorsTest.php.
+Tombol password: resources/views/components/password-field.blade.php,
+    resources/views/components/auth/input.blade.php;
+    resources/views/pages/dashboard/*staff-management.blade.php.
+Form password: resources/views/auth/login.blade.php, register.blade.php;
+    resources/views/pages/account/settings.blade.php serta form tambah Staff.
+
+AKHIR DOKUMEN

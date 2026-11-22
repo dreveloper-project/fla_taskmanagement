@@ -1,0 +1,537 @@
+DETAIL MENU, HALAMAN, DAN TAMPILAN SISTEM
+PT Flores Lautan Abadi
+Tanggal inventaris: 6 Oktober 2026
+Alamat aplikasi lokal: http://localhost:8000
+
+Dokumen ini disusun dari route, template halaman, komponen tampilan,
+dan pengendali fitur yang tersedia dalam proyek saat pemeriksaan.
+
+KETERANGAN STATUS
+- AKTIF: fitur sudah memproses atau menyimpan data ke database.
+- DEMO: halaman/interaksi sudah tersedia, tetapi data operasional masih
+  berupa contoh statis dan belum terhubung ke pengelolaan data sebenarnya.
+- BELUM TERSEDIA: nama menu sudah ditampilkan, tetapi belum memiliki
+  halaman atau proses yang dapat digunakan.
+
+============================================================
+1. RINGKASAN HALAMAN YANG TERSEDIA
+============================================================
+
+1) Login                 /login                     AKTIF
+2) Registrasi staf       /register                  AKTIF
+3) Overview              /                          CAMPURAN
+4) Task Monitoring       /dashboard/task-monitoring DEMO
+5) Vessel                /dashboard/vessel          AKTIF
+6) Client                /dashboard/clients         AKTIF
+7) Pengaturan akun       /settings/account          AKTIF
+
+8) SPB Penumpang         /dashboard/services/spb/passenger AKTIF
+Jendela modal:
+- Detail kapal.
+- Form Tambahkan Kapal Baru / Edit / Dokumen / Konfirmasi Berlayar.
+- Detail tugas.
+
+Logout merupakan aksi tombol Keluar, bukan halaman tersendiri.
+Foto profil dilayani melalui /profile/picture, bukan halaman menu.
+
+============================================================
+2. STRUKTUR MENU SIDEBAR DASHBOARD
+============================================================
+
+A. Identitas aplikasi
+   - Logo jangkar, tulisan FLA., dan Flores Lautan Abadi.
+   - Klik logo mengarah ke halaman Overview.
+
+B. Kelompok Workspace
+   - Overview: membuka ringkasan operasional.
+   - Task Monitoring: membuka daftar dan ringkasan tugas.
+   - Task Monitoring menampilkan badge 05, saat ini angka contoh statis.
+
+C. Kelompok Operations
+   - Layanan: kelompok submenu yang dapat dibuka atau ditutup.
+     Submenu yang sudah ditampilkan:
+     1. Surat Persetujuan Berlayar.
+     2. Sertifikat Keselamatan Kapal Penumpang.
+     3. Izin Bunker.
+     4. Sijil Awak Kapal.
+     5. Surat Laut / Pas Besar / Pas Kecil.
+     SPB AKTIF: Kapal Penumpang membuka monitoring. Empat layanan lain belum tersedia.
+   - Vessel: membuka halaman daftar kapal.
+   - Client: membuka daftar client serta form pendaftaran dan edit data.
+     Status AKTIF; menu berada setelah Vessel dan ditandai saat dibuka.
+   - Reports: BELUM TERSEDIA; tombol dinonaktifkan.
+   - Billing: BELUM TERSEDIA; tombol dinonaktifkan.
+
+D. Profil dan sesi pengguna
+   - Foto profil atau avatar inisial.
+   - Nama lengkap, username, serta label Staff.
+   - Klik area profil membuka Pengaturan Akun.
+   - Tombol Keluar mengakhiri sesi dan mengarahkan ke halaman login.
+
+============================================================
+3. TAMPILAN UMUM APLIKASI
+============================================================
+
+- Sidebar berwarna hijau keabu-abuan gelap, dengan aksen biru untuk
+  menu utama yang sedang aktif.
+- Area konten berlatar abu-abu muda; kartu dan formulir berlatar putih.
+- Sudut komponen membulat, garis pemisah tipis, dan bayangan ringan.
+- Tipografi menggunakan Instrument Sans.
+- Ikon bertema navigasi, kapal, jangkar, dokumen, kalender, dan tugas.
+- Warna biru untuk informasi/proses, hijau untuk kondisi selesai/baik,
+  serta merah muda untuk peringatan atau kondisi perlu perhatian.
+- Header dashboard menampilkan breadcrumb, label Demo preview/Data tersimpan,
+  lokasi Makassar, ID, dan avatar yang juga dapat membuka pengaturan akun.
+- Footer menampilkan PT Flores Lautan Abadi dan slogan operasional.
+- Tampilan responsif untuk desktop dan layar kecil.
+- Pada layar kecil, sidebar dibuka melalui tombol menu, dilengkapi
+  overlay, tombol tutup, dan dukungan tombol Escape.
+- Grid kartu dan form menyesuaikan jumlah kolom dengan lebar layar.
+- Tersedia label form, indikator fokus, dan tautan lewati ke konten utama.
+
+============================================================
+4. HALAMAN LOGIN
+============================================================
+
+Status: AKTIF
+Lokasi: /login
+Akses: pengguna yang belum login.
+
+Tampilan:
+- Judul Selamat datang kembali.
+- Form Username dan Password.
+- Checkbox Ingat saya.
+- Tombol Masuk, dengan indikator Sedang masuk saat formulir dikirim.
+- Tautan Daftar sebagai staf menuju registrasi.
+- Desktop: panel identitas FLA di kiri dan formulir di kanan.
+- Layar kecil: formulir dengan identitas FLA yang lebih ringkas.
+
+Perilaku:
+- Login memakai username dan password, bukan email.
+- Username dinormalisasi menjadi huruf kecil dan dipangkas spasinya.
+- Login hanya menerima akun dengan role staff.
+- Setelah login, pengguna kembali ke halaman tujuan sebelumnya atau
+  ke Overview jika tidak ada tujuan sebelumnya.
+- Input salah menampilkan pesan validasi/kegagalan login.
+- Ada pembatasan setelah lima percobaan login gagal untuk kombinasi
+  username dan alamat IP, dengan masa tunggu sekitar satu menit.
+
+============================================================
+5. HALAMAN REGISTRASI STAF
+============================================================
+
+Status: AKTIF
+Lokasi: /register
+Akses: pengguna yang belum login.
+
+Field yang tersedia:
+- Nama lengkap.
+- Username.
+- Nomor telepon.
+- Email.
+- Password.
+- Konfirmasi password.
+- Foto profil, bersifat opsional.
+
+Tampilan dan interaksi:
+- Judul Buat akun staf.
+- Pemilihan foto dengan pratinjau sebelum dikirim.
+- Petunjuk format/ukuran foto dan aturan username/password.
+- Pesan validasi pada field yang bermasalah.
+- Tombol Daftar sebagai staf dan indikator Membuat akun.
+- Tautan Masuk bagi pengguna yang sudah memiliki akun.
+
+Perilaku:
+- Semua akun baru otomatis berstatus staff; tidak ada pilihan admin.
+- Username dan email harus unik serta disimpan dalam huruf kecil.
+- Username sepanjang 3-50 karakter: huruf, angka, titik, atau garis bawah.
+- Foto menerima JPG, PNG, dan WebP; maksimal 2 MB dan 4096 x 4096 piksel.
+- Password dikonfirmasi dan disimpan dalam bentuk hash.
+- Kebijakan password mengikuti konfigurasi aplikasi: minimal 8 karakter
+  pada lingkungan pengembangan; aturan lebih ketat pada produksi.
+- Akun tersimpan ke database dan pengguna langsung masuk ke Overview.
+- Jika belum memiliki foto, avatar akun menggunakan inisial nama.
+- Registrasi dibatasi lima permintaan per menit per alamat IP.
+
+============================================================
+6. HALAMAN OVERVIEW
+============================================================
+
+Status: CAMPURAN; data SPB aktual dan beberapa ringkasan demo.
+Lokasi: /
+
+- Active Services menghitung SPB aktif dari database.
+- SPB Pending menghitung Draft, Ready To Apply, Applied, Revision Required.
+- Klik SPB Pending membuka monitoring dengan filter pending.
+- Daftar layanan aktif menampilkan lima SPB terbaru: nomor, vessel,
+  rute, jadwal WITA, status, PIC. Nomor layanan membuka detail SPB.
+- Panel Monitor keberangkatan membuka filter Ready To Sail.
+- Need Attention, Departures Today, Expiring Documents, Completed Today,
+  banner perhatian dan tanggal header masih contoh.
+- Keterangan demo tetap tersedia untuk bagian yang belum terhubung.
+
+============================================================
+7. HALAMAN TASK MONITORING
+============================================================
+
+Status: DEMO; daftar dan modal detail dapat ditampilkan.
+Lokasi: /dashboard/task-monitoring
+
+A. Ringkasan tugas
+   - Total Active Tasks: 05.
+   - Tasks Due Today: 03.
+   - Overdue Tasks: 01.
+   - Completed Tasks: 01.
+   - Tanggal tampilan masih menggunakan contoh 5 Oktober 2026.
+
+B. Banner tugas terlambat
+   - Menampilkan satu tugas melewati tenggat waktu.
+   - Tautan Lihat tugas menggulir ke tugas Revisi dokumen bunker.
+
+C. Task List
+   - Enam tugas contoh; lima aktif dan satu selesai.
+   - Kolom/informasi yang ditampilkan:
+     nomor dan judul tugas, layanan terkait, kapal, client,
+     Assigned Staff / PIC, prioritas, status, tenggat waktu,
+     progress persentase, serta tombol Lihat detail.
+   - Prioritas: High, Medium, Low.
+   - Status: Pending, In Progress, In Review, Completed.
+   - Badge Overdue untuk tugas yang ditandai terlambat.
+   - Progress ditampilkan dalam bentuk angka dan batang kemajuan.
+
+D. Contoh tugas yang tersedia
+   1. Verifikasi dokumen keberangkatan.
+   2. Revisi dokumen bunker.
+   3. Lengkapi hasil pemeriksaan kapal.
+   4. Pembaruan daftar awak kapal.
+   5. Tinjau dokumen kebangsaan kapal.
+   6. Finalisasi persetujuan berlayar.
+
+E. Modal detail tugas
+   - Dibuka melalui judul tugas atau tombol Lihat detail.
+   - Memuat Task Title, Related Service, Vessel, Client,
+     Assigned Staff / PIC, Priority, Status, Start Date, Due Date.
+   - Memuat progress, Notes, Attachment, dan Last Update beserta PIC.
+   - Menampilkan peringatan untuk tugas overdue.
+   - Lampiran menampilkan contoh nama dan ukuran file.
+   - Tugas tanpa lampiran menampilkan Belum ada lampiran.
+   - Modal dapat ditutup melalui tombol Tutup atau ikon silang.
+
+Batasan:
+- Belum ada tambah, edit, hapus, penugasan ulang, atau perubahan status tugas.
+- Progress dan tenggat tidak dihitung dari data tersimpan.
+- Nama PIC merupakan data contoh, bukan hubungan dengan akun staf aktual.
+- Lampiran belum dapat diunduh atau diunggah.
+- Label Semua tugas adalah penanda tampilan, bukan filter interaktif.
+- Belum ada pencarian, penyortiran, atau pagination tugas.
+
+============================================================
+8. HALAMAN VESSEL
+============================================================
+
+Status: AKTIF; data, dokumen, dan status kapal tersimpan di database.
+Lokasi: /dashboard/vessel
+
+A. Daftar dan ringkasan
+   - Ringkasan Total, Berlayar, Sandar, Perawatan berasal dari database.
+   - Kartu kapal responsif dengan pagination.
+   - Detail, tambah, dan edit melalui modal yang dapat disimpan.
+
+B. Informasi kapal
+   - Nama, jenis, bendera, status operasional.
+   - Jenis: Penumpang, Kargo, Fishing, Tanker, Tugboat, Lainnya.
+   - Client opsional dari database; jika dipilih menjadi pemilik.
+   - Pemilik/operator manual tersedia untuk vessel tanpa client.
+   - Port of registry, registry number, call sign, GT, NT, LOA, breadth,
+     draft, tahun pembuatan.
+   - Angka, tanggal, pilihan jenis/status, dan relasi client divalidasi.
+
+C. Dokumen kapal
+   - 16 jenis: Grosse Akta, Surat Ukur, Surat Laut, Pas Besar, Pas Kecil,
+     Ship Particulars, General Arrangement, Sertifikat Keselamatan,
+     Safe Manning, Load Line, Radio, Classification, SKKP, SMC,
+     Asuransi, Sijil Awak Kapal.
+   - Semua opsional saat pendaftaran. PDF/JPG/JPEG/PNG, maksimal 2 MB/file.
+   - Tanggal terbit/kedaluwarsa opsional dan divalidasi.
+   - File tersimpan privat, hanya dapat diunduh staf.
+   - Satu dokumen aktif per jenis. Upload pengganti mengganti file aktif.
+   - Status valid, segera kedaluwarsa, expired, atau masa berlaku belum
+     diketahui. Peringatan memakai konfigurasi vessels.
+   - Layanan pembaruan sertifikat belum aktif; modulnya belum tersedia.
+
+D. Integrasi SPB
+   - Detail menampilkan Active SPB dan SPB History beserta tautan.
+   - SPB Ready To Sail menampilkan kartu dan Konfirmasi Berlayar.
+   - Modal konfirmasi meminta tanggal/jam aktual WITA dan catatan opsional.
+   - SPB terbit tidak otomatis mengubah status operasional kapal.
+   - Konfirmasi valid menyimpan sailed_at/confirmed_by dan Berlayar.
+   - Hasil Berhasil/Gagal dicatat pada detail SPB.
+   - Pengeditan jenis/status manual dibatasi selama ada SPB aktif.
+   - Link ?vessel={id} langsung membuka detail kapal terkait.
+
+Batasan: belum tersedia hapus, pencarian, atau filter daftar kapal.
+
+============================================================
+9. HALAMAN CLIENT
+============================================================
+
+Status: AKTIF; pendaftaran dan perubahan data tersimpan ke database.
+Lokasi: /dashboard/clients
+Akses: staf yang sudah login, melalui menu Client di sidebar Operations.
+
+A. Header dan tata letak
+   - Judul Client, keterangan Data relasi usaha, dan penjelasan singkat.
+   - Desktop lebar: form di kiri dan daftar client di kanan.
+   - Layar kecil: form dan daftar tersusun vertikal; tabel dapat digulir
+     secara horizontal jika ruang layar tidak mencukupi.
+   - Menggunakan sidebar, header, dan footer dashboard yang sama.
+
+B. Form Tambah client
+   - Nama client: wajib diisi, maksimal 255 karakter.
+   - Nomor induk / PT / CV / NPWP: satu kolom identitas opsional,
+     maksimal 255 karakter, bukan beberapa field terpisah.
+   - Identitas disimpan sebagai teks agar nol di depan dan tanda baca
+     tetap dipertahankan; tidak ada pemeriksaan format khusus NPWP.
+   - Spasi di awal/akhir nama dan identitas dibuang sebelum disimpan.
+   - Nama berisi spasi saja ditolak; identitas kosong disimpan tanpa nilai.
+   - Tombol Daftarkan client, dengan indikator Menyimpan saat diproses.
+   - Pesan validasi ditampilkan pada field yang bermasalah.
+   - Setelah berhasil, muncul pesan Client berhasil didaftarkan,
+     form dikosongkan, dan daftar kembali ke halaman pertama.
+
+C. Daftar client
+   - Menampilkan jumlah seluruh client yang tersimpan.
+   - Kolom: Nama client, Nomor induk / PT / CV / NPWP, dan Aksi.
+   - Diurutkan dari client yang paling baru didaftarkan.
+   - Pagination tersedia jika jumlah data melebihi 10 client per halaman.
+   - Identitas kosong ditampilkan sebagai Belum diisi.
+   - Jika belum ada data, tampil petunjuk mendaftarkan client pertama.
+   - Setiap baris memiliki tombol Edit.
+
+D. Edit client
+   - Tombol Edit mengisi form yang sama dengan data client terpilih.
+   - Judul form berubah menjadi Edit client dan tombol menjadi
+     Simpan perubahan, disertai tombol Batal.
+   - Nama dan identitas dapat diubah; identitas juga dapat dikosongkan.
+   - Validasi sama dengan pendaftaran client.
+   - Setelah berhasil, muncul pesan Data client berhasil diperbarui
+     dan form kembali ke mode Tambah client.
+   - Batal mengosongkan form dan kembali ke mode tambah tanpa menyimpan.
+
+E. Akses dan batasan
+   - Semua staf dapat melihat, mendaftarkan, dan mengedit daftar yang sama.
+   - Pengunjung tanpa login diarahkan ke login; role selain staff ditolak.
+   - Nama dan identitas tidak diwajibkan unik.
+   - Belum tersedia hapus, pencarian, filter, atau pilihan urutan client.
+   - Data client terhubung ke Vessel dan SPB. Task masih demo.
+   - Data Client tersimpan dan dapat diperbarui.
+
+============================================================
+10. HALAMAN PENGATURAN AKUN
+============================================================
+
+Status: AKTIF
+Lokasi: /settings/account
+Akses: klik profil sidebar atau avatar pada header dashboard.
+
+A. Header halaman
+   - Judul Pengaturan akun.
+   - Deskripsi pengelolaan profil dan keamanan akun.
+   - Tombol Kembali ke dashboard.
+
+B. Panel Informasi profil
+   - Menampilkan foto/avatar saat ini dan label Staff.
+   - Field yang dapat diedit: nama lengkap, username, nomor telepon, email.
+   - Foto profil dapat diganti dengan pratinjau sebelum disimpan.
+   - Jika sudah ada foto, tersedia pilihan Hapus foto saat disimpan.
+   - Penghapusan foto mengembalikan tampilan avatar ke inisial.
+   - Tombol Simpan perubahan dan indikator Menyimpan.
+   - Pesan sukses setelah pembaruan serta pesan validasi pada field.
+   - Data benar-benar disimpan ke akun pengguna yang sedang login.
+   - Username dan email tetap harus unik; nilai milik akun sendiri diizinkan.
+   - Username baru digunakan pada login berikutnya.
+   - Aturan format/ukuran foto sama dengan registrasi.
+   - Foto lama dihapus dari penyimpanan setelah berhasil diganti/dihapus.
+
+C. Panel Ubah password
+   - Field Password saat ini, Password baru, Konfirmasi password baru.
+   - Password saat ini harus benar.
+   - Password baru harus memenuhi aturan dan berbeda dari password lama.
+   - Tombol Perbarui password dan indikator Menyimpan.
+   - Menampilkan pesan sukses atau validasi.
+   - Password baru disimpan sebagai hash dan dipakai saat login berikutnya.
+   - Pengguna tetap login setelah pembaruan; ID sesi diperbarui.
+   - Permintaan perubahan password dibatasi enam kali per menit per pengguna.
+
+D. Tata letak
+   - Desktop lebar: panel profil di kiri, panel password di kanan.
+   - Layar lebih kecil: kedua panel tersusun vertikal.
+   - Tampilan menggunakan sidebar dan header dashboard yang sama.
+
+============================================================
+11. AKSES DAN FITUR AKUN/CLIENT YANG SUDAH AKTIF
+============================================================
+
+- Satu jenis akses pengguna: staff, dengan hak akses yang sama.
+- Pengunjung tanpa login diarahkan ke login saat membuka dashboard/settings.
+- Akun dengan role selain staff tidak mendapat akses halaman staf.
+- Pengguna yang sudah login diarahkan dari login/registrasi ke dashboard.
+- Pengeditan akun hanya memakai identitas pengguna yang sedang login.
+- Tidak ada pemilihan akun lain atau perubahan role melalui form profil.
+- Foto profil disimpan secara privat dan ditampilkan kepada pemilik akun.
+- Tombol Keluar mengakhiri autentikasi dan membatalkan sesi pengguna.
+- Daftar client tersimpan di database dan dapat dikelola bersama oleh staf.
+- Pendaftaran dan edit client tersedia dengan nama wajib dan identitas
+  opsional; daftar menampilkan jumlah data serta pagination.
+
+============================================================
+12. RANGKUMAN FITUR YANG BELUM TERSEDIA
+============================================================
+
+- Layanan selain SPB Kapal Penumpang: sertifikat keselamatan, bunker,
+  sijil awak, dan dokumen kebangsaan kapal.
+- SPB Cargo, SPB Manual, API/submit otomatis Inaportnet.
+- Reports dan Billing.
+- Persistence Task: tambah/edit/hapus, assignment, status, lampiran.
+- Sinkronisasi seluruh kartu Overview selain Active Services, SPB Pending,
+  dan daftar layanan SPB aktif.
+- Hapus kapal; pencarian/filter kapal; pagination/pencarian/filter tugas.
+- Hapus, pencarian, filter, pilihan urutan client.
+- Manajemen pengguna lain atau pembagian admin/staf.
+- Lupa/reset password melalui email dan penghapusan akun sendiri.
+
+Data Client, Vessel, dan SPB berasal dari database. Task Monitoring masih
+demo. SPB tidak membuat relasi Task palsu atau menduplikasi model Task.
+
+============================================================
+13. SUMBER PEMERIKSAAN DALAM PROYEK
+============================================================
+
+- routes/web.php
+- resources/views/auth/
+- resources/views/pages/dashboard/
+- resources/views/pages/account/settings.blade.php
+- resources/views/components/dashboard/
+- resources/views/components/auth/
+- resources/views/layouts/app.blade.php
+- app/Http/Controllers/Auth/
+- app/Http/Controllers/AccountSettingsController.php
+- app/Http/Controllers/AccountPasswordController.php
+- app/Http/Controllers/ProfilePictureController.php
+- app/Http/Requests/
+- app/Models/Client.php
+- database/migrations/2026_10_06_064706_create_clients_table.php
+- tests/Feature/ClientTest.php
+- app/Models/Vessel.php, VesselDocument.php, SpbService.php,
+  SpbDocument.php, SpbStatusHistory.php
+- app/Services/PassengerSpbWorkflow.php dan SpbReadinessService.php
+- app/Http/Controllers/SpbDocumentDownloadController.php
+- resources/views/pages/services/
+- config/spb.php dan config/vessels.php
+- tests/Feature/PassengerSpbTest.php dan SpbWorkflowTest.php
+
+Dokumen ini merupakan inventaris kondisi saat pemeriksaan, bukan daftar
+fitur yang direncanakan atau jaminan bahwa semua menu sudah selesai.
+
+============================================================
+14. SPB KAPAL PENUMPANG
+============================================================
+
+Status: AKTIF, monitoring internal. Hasil Inaportnet dicatat manual.
+Akses: Layanan > Surat Persetujuan Berlayar > Kapal Penumpang.
+Semua tindakan dan file dibatasi untuk staf yang sudah login.
+
+A. Halaman dan route
+   - /dashboard/services/spb : pilihan jenis SPB.
+   - /dashboard/services/spb/passenger : monitoring.
+   - /dashboard/services/spb/passenger/create : buat Draft.
+   - /dashboard/services/spb/passenger/{spb}/edit : edit Draft/Revisi.
+   - /dashboard/services/spb/passenger/{spb} : detail dan tindakan proses.
+   - /spb/{spb}/documents/{document}/download : file privat terotorisasi.
+   - Simpan/perubahan status dilakukan melalui action Livewire.
+
+B. Monitoring
+   - Ringkasan database: Active SPB, Draft, Ready To Apply, Revision
+     Required, Ready To Sail, Completed.
+   - Tabel: nomor layanan, vessel, client, pelabuhan berangkat, tujuan,
+     estimasi berangkat, PIC, prioritas, badge status, last update, Detail.
+   - Search nomor layanan/vessel/client/tujuan.
+   - Filter status/history, vessel, priority, rentang tanggal WITA.
+   - Pagination 10 data per halaman, data terbaru lebih dahulu.
+
+C. Draft
+   - Wajib: priority Low/Medium/High/Urgent; vessel Penumpang tersimpan;
+     crew dan passenger bilangan bulat >= 0; pelabuhan berangkat; tujuan;
+     estimasi tanggal/jam berangkat; estimasi selesai aktivitas pelabuhan
+     (tidak boleh setelah jadwal berangkat).
+   - Client otomatis mengikuti vessel; tanpa client tetap diizinkan.
+   - PIC/created_by dari staf pembuat. Catatan opsional.
+   - Nomor internal unik SPB-YYYY-NNNN; nomor resmi SPB terpisah.
+   - Enam dokumen opsional pada Draft: Surat Permohonan SPB, Master
+     Sailing Declaration, Cargo Manifest, Warta Kapal, Bukti Pembayaran,
+     Bukti PNBP.
+   - PDF/JPG/JPEG/PNG maksimal 2 MB; validasi jenis, ekstensi, ukuran.
+   - Upload ulang menambah versi baru. File lama tetap disimpan.
+
+D. Ready To Apply dan Vessel Document Check
+   - Aturan terpusat pada SpbReadinessService dan config/spb.php.
+   - Default: enam dokumen SPB lengkap, Surat Ukur, salah satu Surat Laut/
+     Pas Besar/Pas Kecil, Sertifikat Keselamatan, Safe Manning,
+     Classification Certificate.
+   - File harus benar-benar ada. Sertifikat bermasa berlaku memerlukan
+     expiry yang mencakup hari ini dan jadwal keberangkatan.
+   - Dokumen segera kedaluwarsa lolos jika mencakup jadwal.
+   - Surat Ukur/kebangsaan boleh tanpa expiry.
+   - Form/detail menampilkan kekurangan, Available/Missing/Expired,
+     dan Lengkapi di Vessel. Draft tetap bisa disimpan.
+   - Applied memeriksa ulang persyaratan terkini.
+   - Aturan dapat disesuaikan lewat config/spb.php.
+
+E. Workflow
+   Draft -> Ready To Apply -> Applied / Under Review.
+   Applied -> Revision Required -> Ready to Resubmit -> Applied.
+   Applied -> Rejected (terminal, alasan wajib, lampiran opsional).
+   Applied -> Approved / SPB Issued -> Ready To Sail.
+   Ready To Sail -> konfirmasi Berlayar di Vessel -> hasil:
+     Berhasil Berlayar -> Completed.
+     Gagal Berlayar -> Failed To Sail (alasan wajib, lampiran opsional).
+   Semua transisi divalidasi di server.
+
+F. Inaportnet
+   - Staf mengajukan di luar FLA, lalu mencatat tanggal/jam pengajuan,
+     reference opsional, dan catatan.
+   - Revisi wajib catatan dan bagian yang diperbaiki; bukti opsional.
+     Edit/upload ulang tidak menghapus history.
+   - Approved wajib nomor SPB, tanggal/jam terbit, dan file resmi.
+   - FLA tidak mengajukan atau menerbitkan SPB secara otomatis.
+   - Tanggal pengajuan/terbit/aktual tidak boleh di masa depan; terbit
+     tidak mendahului pengajuan terakhir, keberangkatan tidak mendahului
+     penerbitan.
+   - Satu vessel tidak dapat memiliki dua SPB Ready To Sail bersamaan.
+
+G. Vessel dan hasil keberangkatan
+   - Ready To Sail terpisah dari Sandar/Berlayar/Perawatan dan
+     sailing_result pending/success/failed.
+   - Konfirmasi hanya dari vessel Sandar dengan file SPB resmi tersedia.
+     Waktu aktual wajib, pengguna tercatat.
+   - Berhasil hanya dapat dicatat setelah konfirmasi keberangkatan.
+   - Gagal dapat dicatat sebelum/sesudah berangkat. Jika sebelumnya
+     Berlayar, kapal dikembalikan ke Sandar dan riwayat tetap tersimpan.
+
+H. Archive dan audit
+   - Rejected, Completed, Failed To Sail tetap ada sebagai history.
+   - completed_at/archived_at menandai akhir proses; tidak ada delete.
+   - Versi upload, relasi, alasan, staf, dan timeline tetap ada.
+   - Pengajuan/resubmission menyalin dokumen kapal ke arsip SPB.
+     Penggantian file aktif di Vessel tidak merusak arsip pengajuan lama.
+   - Transaksi database dan pembersihan file baru menjaga konsistensi
+     apabila penyimpanan gagal.
+   - Staf dapat melihat/download dari detail dan filter status.
+   - Waktu ditampilkan/input WITA dan disimpan UTC.
+
+I. Batasan
+   - Task Monitoring belum memiliki persistence; SPB menjadi layanan
+     tersendiri tanpa task/assignment palsu.
+   - Tidak mencakup SPB Cargo/Manual, Billing, Reports, workflow
+     sertifikat lain, manajemen admin, atau API Inaportnet.
+

@@ -1,0 +1,24 @@
+<?php
+
+use Illuminate\Database\Migrations\Migration;
+use Illuminate\Database\Schema\Blueprint;
+use Illuminate\Support\Facades\Schema;
+
+return new class extends Migration
+{
+    public function up(): void
+    {
+        Schema::table('spb_services', function (Blueprint $table): void {
+            $table->string('billing_code_labuh')->nullable();
+            $table->string('billing_code_rambu')->nullable();
+            $table->string('billing_code_mastercable')->nullable();
+        });
+    }
+
+    public function down(): void
+    {
+        Schema::table('spb_services', function (Blueprint $table): void {
+            $table->dropColumn(['billing_code_labuh', 'billing_code_rambu', 'billing_code_mastercable']);
+        });
+    }
+};
